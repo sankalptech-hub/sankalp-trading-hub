@@ -11,6 +11,7 @@ import Strategies from "./pages/Strategies";
 import Alerts from "./pages/Alerts";
 import Analytics from "./pages/Analytics";
 import BuildTracker from "./pages/BuildTracker";
+import AdminPanel from "./pages/AdminPanel";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -31,6 +32,7 @@ const App = () => (
               <Route path="/alerts" element={<Alerts />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/build-tracker" element={<BuildTracker />} />
+              <Route path="/admin" element={<AdminPanel />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
