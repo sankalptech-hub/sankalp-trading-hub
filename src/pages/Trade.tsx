@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Loader2 } from 'lucide-react';
-import { fetchPrice } from '@/lib/marketData';
+import { Loader2, AlertTriangle, Link as LinkIcon } from 'lucide-react';
+import { fetchPrice, getCurrencySymbol, ALL_SYMBOLS } from '@/lib/marketData';
 
 const statusColor: Record<string, string> = {
   pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
@@ -19,7 +21,8 @@ const statusColor: Record<string, string> = {
 
 const Trade = () => {
   const { user } = useAuth();
-  const [symbol, setSymbol] = useState('');
+  const [params] = useSearchParams();
+  const [symbol, setSymbol] = useState(params.get('symbol') || '');
   const [qty, setQty] = useState('');
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
   const [orders, setOrders] = useState<any[]>([]);
@@ -28,31 +31,35 @@ const Trade = () => {
   const [livePrice, setLivePrice] = useState<{ price: number; cached: boolean } | null>(null);
   const [priceLoading, setPriceLoading] = useState(false);
   const [priceError, setPriceError] = useState('');
+  const [brokers, setBrokers] = useState<any[]>([]);
+  const [selectedBroker, setSelectedBroker] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   const fetchOrders = async () => {
     if (!user) return;
-    const { data, error } = await supabase.from('orders').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(20);
-    if (error) { toast.error(error.message); return; }
+    const { data } = await supabase.from('orders').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(20);
     setOrders(data || []);
   };
 
-  useEffect(() => { fetchOrders(); }, [user]);
+  useEffect(() => {
+    fetchOrders();
+    if (!user) return;
+    supabase.from('brokers').select('*').eq('user_id', user.id).eq('status', 'connected').then(({ data }) => {
+      setBrokers(data || []);
+      const def = data?.find(b => b.is_default);
+      setSelectedBroker(def?.id || data?.[0]?.id || '');
+    });
+  }, [user]);
 
   const lookupPrice = async () => {
     if (!symbol.trim()) return;
-    const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_KEY;
-    if (!apiKey) return;
-    setPriceLoading(true);
-    setPriceError('');
-    setLivePrice(null);
+    setPriceLoading(true); setPriceError(''); setLivePrice(null);
     try {
-      const data = await fetchPrice(symbol, apiKey);
+      const data = await fetchPrice(symbol);
       setLivePrice({ price: data.price, cached: data.cached });
     } catch (err: any) {
       setPriceError(err.message || 'Price lookup failed');
-    } finally {
-      setPriceLoading(false);
-    }
+    } finally { setPriceLoading(false); }
   };
 
   const validate = () => {
@@ -71,9 +78,7 @@ const Trade = () => {
     if (!user) return;
     const q = Number(qty) || 50;
     const signalType = q > 100 ? 'BUY' : q < 10 ? 'SELL' : 'HOLD';
-    const { data, error } = await supabase.from('signals').insert({
-      user_id: user.id, symbol: symbol.toUpperCase(), signal_type: signalType, price: q,
-    }).select().single();
+    const { data, error } = await supabase.from('signals').insert({ user_id: user.id, symbol: symbol.toUpperCase(), signal_type: signalType, price: q }).select().single();
     if (error) { toast.error(error.message); return; }
     setLastSignal(data);
     toast.success(`Signal: ${signalType} ${symbol.toUpperCase()}`);
@@ -81,83 +86,101 @@ const Trade = () => {
 
   const checkRisks = async (upperSymbol: string, quantity: number) => {
     if (!user) return;
-    // Large order warning
-    if (quantity > 5000) {
-      await supabase.from('alerts').insert({ user_id: user.id, message: `Large order: ${upperSymbol} ${quantity} units exceeds recommended size`, type: 'warning' });
-    }
-    // Portfolio concentration
+    if (quantity > 5000) await supabase.from('alerts').insert({ user_id: user.id, message: `Large order: ${upperSymbol} ${quantity} units exceeds recommended size`, type: 'warning' });
     const { count } = await supabase.from('positions').select('*', { count: 'exact', head: true }).eq('user_id', user.id);
-    if ((count || 0) > 10) {
-      await supabase.from('alerts').insert({ user_id: user.id, message: 'Portfolio concentration warning: more than 10 open positions', type: 'warning' });
-    }
-    // Overtrading check
+    if ((count || 0) > 10) await supabase.from('alerts').insert({ user_id: user.id, message: 'Portfolio concentration warning: more than 10 open positions', type: 'warning' });
     const today = new Date().toISOString().split('T')[0];
     const { data: todayOrders } = await supabase.from('orders').select('id').eq('user_id', user.id).eq('symbol', upperSymbol).gte('created_at', today);
-    if ((todayOrders?.length || 0) > 3) {
-      await supabase.from('alerts').insert({ user_id: user.id, message: `Overtrading detected: ${upperSymbol} traded ${todayOrders?.length} times today`, type: 'danger' });
-    }
+    if ((todayOrders?.length || 0) > 3) await supabase.from('alerts').insert({ user_id: user.id, message: `Overtrading detected: ${upperSymbol} traded ${todayOrders?.length} times today`, type: 'danger' });
   };
 
   const executeTrade = async () => {
     if (!validate() || !user) return;
     const upperSymbol = symbol.toUpperCase();
     const quantity = Number(qty);
-
-    // Exposure limit check
     const { data: existingPos } = await supabase.from('positions').select('qty').eq('user_id', user.id).eq('symbol', upperSymbol).maybeSingle();
-    if (existingPos && Math.abs(existingPos.qty) > 5000) {
-      setErrors({ symbol: `Exposure limit: existing position in ${upperSymbol} exceeds 5000 units` });
-      return;
-    }
+    if (existingPos && Math.abs(existingPos.qty) > 5000) { setErrors({ symbol: `Exposure limit: existing position in ${upperSymbol} exceeds 5000 units` }); return; }
+
+    const broker = brokers.find(b => b.id === selectedBroker);
+    const brokerName = broker?.broker_name || 'demo';
+    const isDemo = brokerName === 'demo';
 
     const { error: orderErr } = await supabase.from('orders').insert({
       user_id: user.id, symbol: upperSymbol, qty: quantity, side, status: 'filled',
-    });
+      broker_id: selectedBroker || null, broker_name: brokerName,
+    } as any);
     if (orderErr) { toast.error(orderErr.message); return; }
 
-    // Upsert position
+    if (!isDemo && selectedBroker) {
+      await supabase.from('broker_orders').insert({
+        user_id: user.id, broker_id: selectedBroker, symbol: upperSymbol,
+        qty: quantity, side, price: livePrice?.price || 0, status: 'filled',
+      } as any);
+    }
+
     const { data: existing } = await supabase.from('positions').select('*').eq('user_id', user.id).eq('symbol', upperSymbol).maybeSingle();
     if (existing) {
       const newQty = side === 'BUY' ? existing.qty + quantity : existing.qty - quantity;
       await supabase.from('positions').update({ qty: newQty }).eq('id', existing.id);
     } else {
-      await supabase.from('positions').insert({
-        user_id: user.id, symbol: upperSymbol, qty: side === 'BUY' ? quantity : -quantity, avg_price: livePrice?.price || Math.random() * 1000,
-      });
+      await supabase.from('positions').insert({ user_id: user.id, symbol: upperSymbol, qty: side === 'BUY' ? quantity : -quantity, avg_price: livePrice?.price || Math.random() * 1000 });
     }
 
     await supabase.from('alerts').insert({ user_id: user.id, message: `Trade executed: ${side} ${quantity} ${upperSymbol}`, type: 'success' });
     await checkRisks(upperSymbol, quantity);
 
-    toast.success(`Trade executed: ${side} ${quantity} ${upperSymbol}`);
-    setSymbol(''); setQty(''); setErrors({});
-    setLivePrice(null); setLastSignal(null);
+    toast.success(isDemo ? `Demo order placed: ${side} ${quantity} ${upperSymbol}` : `Order sent to ${broker?.display_name}: ${side} ${quantity} ${upperSymbol}`);
+    setSymbol(''); setQty(''); setErrors({}); setLivePrice(null); setLastSignal(null);
     fetchOrders();
   };
 
   const updateOrderStatus = async (id: string, status: string) => {
-    const { error } = await supabase.from('orders').update({ status, updated_at: new Date().toISOString() } as any).eq('id', id);
-    if (error) { toast.error(error.message); return; }
-    toast.success(`Order ${status}`);
-    fetchOrders();
+    await supabase.from('orders').update({ status, updated_at: new Date().toISOString() } as any).eq('id', id);
+    toast.success(`Order ${status}`); fetchOrders();
   };
 
   const signalColor: Record<string, string> = { BUY: 'bg-emerald-500/20 text-emerald-400', SELL: 'bg-red-500/20 text-red-400', HOLD: 'bg-yellow-500/20 text-yellow-400' };
+  const cur = getCurrencySymbol(symbol);
+  const isDemo = brokers.find(b => b.id === selectedBroker)?.broker_name === 'demo' || !selectedBroker;
+  const filteredSuggestions = ALL_SYMBOLS.filter(s => s.toLowerCase().includes(symbol.toLowerCase()));
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Trade Console</h1>
+
+      {isDemo && brokers.length <= 1 && (
+        <div className="flex items-center gap-2 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded text-sm text-yellow-400">
+          <AlertTriangle className="h-4 w-4" /> You are trading in Demo mode. <a href="/brokers" className="underline flex items-center gap-1">Connect Broker <LinkIcon className="h-3 w-3" /></a>
+        </div>
+      )}
+
       <Card className="card-glow max-w-2xl">
         <CardHeader><CardTitle>New Trade</CardTitle></CardHeader>
         <CardContent className="space-y-4">
+          {brokers.length > 0 && (
+            <div>
+              <Label>Trading via</Label>
+              <Select value={selectedBroker} onValueChange={setSelectedBroker}>
+                <SelectTrigger className="w-60"><SelectValue placeholder="Select broker" /></SelectTrigger>
+                <SelectContent>{brokers.map(b => <SelectItem key={b.id} value={b.id}>{b.display_name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="space-y-1">
+            <div className="space-y-1 relative">
               <Label>Symbol</Label>
-              <Input placeholder="AAPL" value={symbol} onChange={e => { setSymbol(e.target.value); setErrors(p => ({ ...p, symbol: '' })); }} onBlur={lookupPrice} />
+              <Input placeholder="RELIANCE.NS" value={symbol} onChange={e => { setSymbol(e.target.value); setErrors(p => ({ ...p, symbol: '' })); setShowSuggestions(true); }} onBlur={() => { setTimeout(() => setShowSuggestions(false), 200); lookupPrice(); }} onFocus={() => setShowSuggestions(true)} />
+              {showSuggestions && symbol && filteredSuggestions.length > 0 && (
+                <div className="absolute z-50 top-full left-0 right-0 bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                  {filteredSuggestions.slice(0, 8).map(s => (
+                    <button key={s} className="w-full text-left px-3 py-2 text-sm hover:bg-accent font-mono" onClick={() => { setSymbol(s); setShowSuggestions(false); }}>{s}</button>
+                  ))}
+                </div>
+              )}
               {errors.symbol && <p className="text-xs text-destructive">{errors.symbol}</p>}
-              {priceLoading && <p className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Loading price...</p>}
+              {priceLoading && <p className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Loading...</p>}
               {priceError && <p className="text-xs text-destructive">{priceError}</p>}
-              {livePrice && <p className="text-xs text-primary font-mono">Current Price: ${livePrice.price.toFixed(2)} {livePrice.cached && <span className="text-muted-foreground">(cached)</span>}</p>}
+              {livePrice && <p className="text-xs text-primary font-mono">Price: {cur}{livePrice.price.toFixed(2)} {livePrice.cached && <span className="text-muted-foreground">(cached)</span>}</p>}
             </div>
             <div className="space-y-1">
               <Label>Quantity</Label>
@@ -193,15 +216,16 @@ const Trade = () => {
       <Card className="card-glow">
         <CardHeader><CardTitle>Recent Orders</CardTitle></CardHeader>
         <CardContent>
-          <div className="table-striped">
+          <div className="table-striped overflow-x-auto">
             <Table>
               <TableHeader>
-                <TableRow><TableHead>Symbol</TableHead><TableHead>Side</TableHead><TableHead>Qty</TableHead><TableHead>Status</TableHead><TableHead>Time</TableHead><TableHead>Actions</TableHead></TableRow>
+                <TableRow><TableHead>Symbol</TableHead><TableHead>Broker</TableHead><TableHead>Side</TableHead><TableHead>Qty</TableHead><TableHead>Status</TableHead><TableHead>Time</TableHead><TableHead>Actions</TableHead></TableRow>
               </TableHeader>
               <TableBody>
                 {orders.map(o => (
                   <TableRow key={o.id}>
                     <TableCell className="font-mono">{o.symbol}</TableCell>
+                    <TableCell><Badge variant="outline">{o.broker_name || 'demo'}</Badge></TableCell>
                     <TableCell><Badge variant={o.side === 'BUY' ? 'default' : 'destructive'}>{o.side}</Badge></TableCell>
                     <TableCell className="font-mono">{o.qty}</TableCell>
                     <TableCell><span className={`px-2 py-0.5 rounded text-xs border ${statusColor[o.status] || ''}`}>{o.status}</span></TableCell>

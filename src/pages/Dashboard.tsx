@@ -6,9 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { TrendingUp, ShoppingCart, Radio, Bell } from 'lucide-react';
 import { toast } from 'sonner';
-import { fetchPrice, PriceData } from '@/lib/marketData';
-
-const WATCHLIST = ['AAPL', 'MSFT', 'TSLA', 'GOOGL', 'AMZN'];
+import { fetchPrice, PriceData, DASHBOARD_WATCHLIST, getCurrencySymbol } from '@/lib/marketData';
 
 const statusColor: Record<string, string> = {
   pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
@@ -33,10 +31,6 @@ const Dashboard = () => {
         supabase.from('signals').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(5),
         supabase.from('alerts').select('*').eq('user_id', user.id).eq('read', false).order('created_at', { ascending: false }).limit(5),
       ]);
-      if (p.error) throw p.error;
-      if (o.error) throw o.error;
-      if (s.error) throw s.error;
-      if (a.error) throw a.error;
       setPositions(p.data || []);
       setOrders(o.data || []);
       setSignals(s.data || []);
@@ -46,22 +40,20 @@ const Dashboard = () => {
     }
   };
 
-  const fetchWatchlist = async () => {
-    const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_KEY;
-    if (!apiKey) return;
-    for (const sym of WATCHLIST) {
+  const fetchWatchlistData = async () => {
+    for (const sym of DASHBOARD_WATCHLIST) {
       try {
-        const data = await fetchPrice(sym, apiKey);
+        const data = await fetchPrice(sym);
         setWatchlist(prev => ({ ...prev, [sym]: { ...data, symbol: sym } }));
-      } catch { /* skip failed lookups */ }
+      } catch { /* skip */ }
     }
   };
 
   useEffect(() => {
     fetchAll();
-    fetchWatchlist();
+    fetchWatchlistData();
     const interval = setInterval(fetchAll, 10000);
-    const watchInterval = setInterval(fetchWatchlist, 30000);
+    const watchInterval = setInterval(fetchWatchlistData, 30000);
     return () => { clearInterval(interval); clearInterval(watchInterval); };
   }, [user]);
 
@@ -91,25 +83,26 @@ const Dashboard = () => {
         ))}
       </div>
 
-      {/* Market Watchlist */}
       {Object.keys(watchlist).length > 0 && (
         <Card className="card-glow">
           <CardHeader><CardTitle className="text-lg">Market Watchlist</CardTitle></CardHeader>
           <CardContent>
             <div className="table-striped">
               <Table>
-                <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change %</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change %</TableHead><TableHead>Volume</TableHead><TableHead></TableHead></TableRow></TableHeader>
                 <TableBody>
-                  {WATCHLIST.map(sym => {
+                  {DASHBOARD_WATCHLIST.map(sym => {
                     const w = watchlist[sym];
                     if (!w) return null;
+                    const cur = getCurrencySymbol(sym);
                     return (
                       <TableRow key={sym}>
                         <TableCell className="font-mono font-semibold">{sym}</TableCell>
-                        <TableCell className="font-mono">${w.price.toFixed(2)}</TableCell>
+                        <TableCell className="font-mono">{cur}{w.price.toFixed(2)}</TableCell>
                         <TableCell className={`font-mono ${w.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                           {w.changePercent >= 0 ? '+' : ''}{w.changePercent.toFixed(2)}%
                         </TableCell>
+                        <TableCell className="font-mono text-xs">{w.volume ? `${(w.volume / 1000000).toFixed(1)}M` : '-'}</TableCell>
                         <TableCell>{w.cached && <span className="text-xs text-muted-foreground">(cached)</span>}</TableCell>
                       </TableRow>
                     );
@@ -200,12 +193,7 @@ const Dashboard = () => {
 };
 
 const AlertBadge = ({ type }: { type: string }) => {
-  const colors: Record<string, string> = {
-    info: 'bg-blue-500/20 text-blue-400',
-    warning: 'bg-yellow-500/20 text-yellow-400',
-    danger: 'bg-red-500/20 text-red-400',
-    success: 'bg-emerald-500/20 text-emerald-400',
-  };
+  const colors: Record<string, string> = { info: 'bg-blue-500/20 text-blue-400', warning: 'bg-yellow-500/20 text-yellow-400', danger: 'bg-red-500/20 text-red-400', success: 'bg-emerald-500/20 text-emerald-400' };
   return <span className={`px-2 py-0.5 rounded text-xs ${colors[type] || colors.info}`}>{type}</span>;
 };
 
