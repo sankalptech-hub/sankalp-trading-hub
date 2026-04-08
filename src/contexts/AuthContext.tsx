@@ -27,31 +27,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   const checkAdminRole = async (userId: string) => {
-    const { data } = await supabase
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', userId);
-    const hasAdmin = !!data && data.some(r => r.role === 'admin');
-    setIsAdmin(hasAdmin);
-    return hasAdmin;
+    try {
+      const { data } = await supabase
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', userId);
+      setIsAdmin(!!data && data.some(r => r.role === 'admin'));
+    } catch {
+      setIsAdmin(false);
+    }
   };
 
   useEffect(() => {
     // Seed admin user on first app load (idempotent)
     supabase.functions.invoke('seed-admin', { method: 'POST' }).catch(() => {});
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    let mounted = true;
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
       setSession(session);
       setUser(session?.user ?? null);
+      setLoading(false);
       if (session?.user) {
-        await checkAdminRole(session.user.id);
+        // Check admin role after setting loading=false so UI isn't blocked
+        checkAdminRole(session.user.id);
       } else {
         setIsAdmin(false);
       }
-      setLoading(false);
     });
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!mounted) return;
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
@@ -60,7 +67,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => { mounted = false; subscription.unsubscribe(); };
   }, []);
 
   const signOut = async () => {
