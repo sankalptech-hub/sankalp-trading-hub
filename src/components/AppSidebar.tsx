@@ -1,34 +1,68 @@
 import {
-  LayoutDashboard, TrendingUp, Layers, Bell, BarChart3, ListChecks, LogOut, Shield, ShieldCheck, Bot,
+  LayoutDashboard, TrendingUp, Radar, Wrench, BarChart3, Layers, Clock,
+  PieChart, Shield, Plug, Bell, Bot, ListChecks, Settings, LogOut,
+  ShieldCheck, Sun, Moon,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
   SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarFooter, useSidebar,
 } from '@/components/ui/sidebar';
 
-const navItems = [
+const mainItems = [
   { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard },
   { title: 'Trade', url: '/trade', icon: TrendingUp },
+  { title: 'Scanner', url: '/scanner', icon: Radar },
+];
+
+const strategyItems = [
+  { title: 'Builder', url: '/builder', icon: Wrench },
+  { title: 'Backtest', url: '/backtest', icon: BarChart3 },
   { title: 'Strategies', url: '/strategies', icon: Layers },
+];
+
+const portfolioItems = [
+  { title: 'History', url: '/history', icon: Clock },
+  { title: 'Analytics', url: '/analytics', icon: PieChart },
+  { title: 'Risk', url: '/risk', icon: Shield },
+];
+
+const marketItems = [
+  { title: 'Brokers', url: '/brokers', icon: Plug },
+];
+
+const systemItems = [
   { title: 'Alerts', url: '/alerts', icon: Bell },
-  { title: 'Analytics', url: '/analytics', icon: BarChart3 },
-  { title: 'Build Tracker', url: '/build-tracker', icon: ListChecks },
   { title: 'AI Assistant', url: '/ai-assistant', icon: Bot },
+  { title: 'Build Tracker', url: '/build-tracker', icon: ListChecks },
+  { title: 'Settings', url: '/settings', icon: Settings },
 ];
 
 const adminItems = [
   { title: 'Admin Panel', url: '/admin', icon: ShieldCheck },
 ];
 
+type NavGroup = { label: string; items: typeof mainItems };
+
 export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
   const location = useLocation();
   const { user, isAdmin, signOut } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+
+  const groups: NavGroup[] = [
+    { label: 'Main', items: mainItems },
+    { label: 'Strategy', items: strategyItems },
+    { label: 'Portfolio', items: portfolioItems },
+    { label: 'Market', items: marketItems },
+    { label: 'System', items: systemItems },
+  ];
 
   return (
     <Sidebar collapsible="icon">
@@ -41,31 +75,38 @@ export function AppSidebar() {
               </span>
             )}
           </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {navItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild isActive={location.pathname === item.url}>
-                    <NavLink to={item.url} end className="hover:bg-accent/50" activeClassName="bg-accent text-primary font-medium">
-                      <item.icon className="mr-2 h-4 w-4" />
-                      {!collapsed && <span>{item.title}</span>}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
         </SidebarGroup>
+
+        {groups.map(g => (
+          <SidebarGroup key={g.label}>
+            <SidebarGroupLabel>{!collapsed && g.label}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {g.items.map(item => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location.pathname === item.url}>
+                      <NavLink to={item.url} end className="hover:bg-accent/50" activeClassName="bg-accent text-primary font-medium">
+                        <item.icon className="mr-2 h-4 w-4" />
+                        {!collapsed && <span>{item.title}</span>}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
+
         {isAdmin && (
           <SidebarGroup>
             <SidebarGroupLabel>{!collapsed && 'Admin'}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {adminItems.map((item) => (
+                {adminItems.map(item => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild isActive={location.pathname === item.url}>
                       <NavLink to={item.url} end className="hover:bg-accent/50" activeClassName="bg-accent text-primary font-medium">
-                        <item.icon className="mr-2 h-4 w-4" />
+                        <item.icon className="mr-2 h-4 w-4 text-destructive" />
                         {!collapsed && <span>{item.title}</span>}
                       </NavLink>
                     </SidebarMenuButton>
@@ -83,12 +124,14 @@ export function AppSidebar() {
               <p className="text-xs text-muted-foreground truncate flex-1">{user?.email}</p>
               {isAdmin && <Badge variant="outline" className="text-primary border-primary text-[10px]"><Shield className="h-3 w-3 mr-1"/>Admin</Badge>}
             </div>
-            <button
-              onClick={signOut}
-              className="flex items-center gap-2 text-xs text-muted-foreground hover:text-destructive transition-colors w-full"
-            >
-              <LogOut className="h-3 w-3" /> Sign Out
-            </button>
+            <div className="flex items-center justify-between">
+              <button onClick={signOut} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-destructive transition-colors">
+                <LogOut className="h-3 w-3" /> Sign Out
+              </button>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={toggleTheme}>
+                {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </Button>
+            </div>
           </div>
         )}
       </SidebarFooter>
