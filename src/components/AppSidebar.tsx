@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, TrendingUp, Layers, Bell, BarChart3, ListChecks, LogOut, Shield,
+  LayoutDashboard, TrendingUp, Layers, Bell, BarChart3, ListChecks, LogOut, Shield, ShieldCheck,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
@@ -17,6 +17,10 @@ const navItems = [
   { title: 'Alerts', url: '/alerts', icon: Bell },
   { title: 'Analytics', url: '/analytics', icon: BarChart3 },
   { title: 'Build Tracker', url: '/build-tracker', icon: ListChecks },
+];
+
+const adminItems = [
+  { title: 'Admin Panel', url: '/admin', icon: ShieldCheck },
 ];
 
 export function AppSidebar() {
@@ -51,6 +55,25 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        {isAdmin && (
+          <SidebarGroup>
+            <SidebarGroupLabel>{!collapsed && 'Admin'}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {adminItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location.pathname === item.url}>
+                      <NavLink to={item.url} end className="hover:bg-accent/50" activeClassName="bg-accent text-primary font-medium">
+                        <item.icon className="mr-2 h-4 w-4" />
+                        {!collapsed && <span>{item.title}</span>}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
       <SidebarFooter className="border-t border-border p-4">
         {!collapsed && (
