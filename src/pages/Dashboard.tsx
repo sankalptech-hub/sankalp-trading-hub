@@ -1,0 +1,159 @@
+import { useEffect, useState } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { TrendingUp, ShoppingCart, Radio, Bell } from 'lucide-react';
+import { toast } from 'sonner';
+
+const Dashboard = () => {
+  const { user } = useAuth();
+  const [positions, setPositions] = useState<any[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [signals, setSignals] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<any[]>([]);
+
+  const fetchAll = async () => {
+    if (!user) return;
+    try {
+      const [p, o, s, a] = await Promise.all([
+        supabase.from('positions').select('*').eq('user_id', user.id).order('updated_at', { ascending: false }).limit(5),
+        supabase.from('orders').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(5),
+        supabase.from('signals').select('*').eq('user_id', user.id).order('created_at', { ascending: false }).limit(5),
+        supabase.from('alerts').select('*').eq('user_id', user.id).eq('read', false).order('created_at', { ascending: false }).limit(5),
+      ]);
+      if (p.error) throw p.error;
+      if (o.error) throw o.error;
+      if (s.error) throw s.error;
+      if (a.error) throw a.error;
+      setPositions(p.data || []);
+      setOrders(o.data || []);
+      setSignals(s.data || []);
+      setAlerts(a.data || []);
+    } catch (err: any) {
+      toast.error('Failed to load dashboard: ' + err.message);
+    }
+  };
+
+  useEffect(() => {
+    fetchAll();
+    const interval = setInterval(fetchAll, 10000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  const stats = [
+    { label: 'Open Positions', value: positions.length, icon: TrendingUp, color: 'text-primary' },
+    { label: 'Pending Orders', value: orders.filter(o => o.status === 'pending').length, icon: ShoppingCart, color: 'text-[hsl(var(--warning))]' },
+    { label: 'Active Signals', value: signals.length, icon: Radio, color: 'text-primary' },
+    { label: 'Unread Alerts', value: alerts.length, icon: Bell, color: 'text-[hsl(var(--destructive))]' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Dashboard</h1>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {stats.map(s => (
+          <Card key={s.label} className="card-glow">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">{s.label}</p>
+                  <p className={`text-3xl font-bold font-mono ${s.color}`}>{s.value}</p>
+                </div>
+                <s.icon className={`h-8 w-8 ${s.color} opacity-50`} />
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="card-glow">
+          <CardHeader><CardTitle className="text-lg">Recent Positions</CardTitle></CardHeader>
+          <CardContent>
+            <div className="table-striped">
+              <Table>
+                <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Qty</TableHead><TableHead>Avg Price</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {positions.length === 0 ? <TableRow><TableCell colSpan={3} className="text-center text-muted-foreground">No positions</TableCell></TableRow> :
+                    positions.map(p => (
+                      <TableRow key={p.id}><TableCell className="font-mono">{p.symbol}</TableCell><TableCell className="font-mono">{p.qty}</TableCell><TableCell className="font-mono">{Number(p.avg_price).toFixed(2)}</TableCell></TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="card-glow">
+          <CardHeader><CardTitle className="text-lg">Recent Orders</CardTitle></CardHeader>
+          <CardContent>
+            <div className="table-striped">
+              <Table>
+                <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Side</TableHead><TableHead>Qty</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {orders.length === 0 ? <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground">No orders</TableCell></TableRow> :
+                    orders.map(o => (
+                      <TableRow key={o.id}>
+                        <TableCell className="font-mono">{o.symbol}</TableCell>
+                        <TableCell><Badge variant={o.side === 'BUY' ? 'default' : 'destructive'}>{o.side}</Badge></TableCell>
+                        <TableCell className="font-mono">{o.qty}</TableCell>
+                        <TableCell><Badge variant="outline">{o.status}</Badge></TableCell>
+                      </TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="card-glow">
+          <CardHeader><CardTitle className="text-lg">Recent Signals</CardTitle></CardHeader>
+          <CardContent>
+            <div className="table-striped">
+              <Table>
+                <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Type</TableHead><TableHead>Price</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {signals.length === 0 ? <TableRow><TableCell colSpan={3} className="text-center text-muted-foreground">No signals</TableCell></TableRow> :
+                    signals.map(s => (
+                      <TableRow key={s.id}><TableCell className="font-mono">{s.symbol}</TableCell><TableCell><Badge>{s.signal_type}</Badge></TableCell><TableCell className="font-mono">{Number(s.price).toFixed(2)}</TableCell></TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="card-glow">
+          <CardHeader><CardTitle className="text-lg">Unread Alerts</CardTitle></CardHeader>
+          <CardContent>
+            <div className="table-striped">
+              <Table>
+                <TableHeader><TableRow><TableHead>Message</TableHead><TableHead>Type</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {alerts.length === 0 ? <TableRow><TableCell colSpan={2} className="text-center text-muted-foreground">No alerts</TableCell></TableRow> :
+                    alerts.map(a => (
+                      <TableRow key={a.id}><TableCell>{a.message}</TableCell><TableCell><AlertBadge type={a.type} /></TableCell></TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+const AlertBadge = ({ type }: { type: string }) => {
+  const colors: Record<string, string> = {
+    info: 'bg-blue-500/20 text-blue-400',
+    warning: 'bg-yellow-500/20 text-yellow-400',
+    danger: 'bg-red-500/20 text-red-400',
+    success: 'bg-emerald-500/20 text-emerald-400',
+  };
+  return <span className={`px-2 py-0.5 rounded text-xs ${colors[type] || colors.info}`}>{type}</span>;
+};
+
+export default Dashboard;
