@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, TrendingUp, Layers, Bell, BarChart3, ListChecks, LogOut, Shield, ShieldCheck,
+  LayoutDashboard, TrendingUp, Layers, Bell, BarChart3, ListChecks, LogOut, Shield, ShieldCheck, Bot,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
@@ -17,6 +17,7 @@ const navItems = [
   { title: 'Alerts', url: '/alerts', icon: Bell },
   { title: 'Analytics', url: '/analytics', icon: BarChart3 },
   { title: 'Build Tracker', url: '/build-tracker', icon: ListChecks },
+  { title: 'AI Assistant', url: '/ai-assistant', icon: Bot },
 ];
 
 const adminItems = [
