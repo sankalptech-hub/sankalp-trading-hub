@@ -68,8 +68,9 @@ const BuildTracker = () => {
 
   useEffect(() => { fetchTasks(); }, [user]);
 
-  const updateField = async (id: string, field: string, value: string) => {
-    const { error } = await supabase.from('build_tasks').update({ [field]: value }).eq('id', id);
+  const updateField = async (id: string, field: 'status' | 'priority' | 'notes', value: string) => {
+    const updateData = { [field]: value } as { status?: string; priority?: string; notes?: string };
+    const { error } = await supabase.from('build_tasks').update(updateData).eq('id', id);
     if (error) { toast.error(error.message); return; }
     setTasks(prev => prev.map(t => t.id === id ? { ...t, [field]: value } : t));
   };
