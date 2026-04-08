@@ -9,26 +9,27 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 
 const SEED_TASKS = [
-  { task_name: 'Setup project structure', module: 'Backend', status: 'Not Started', priority: 'High' },
-  { task_name: 'Setup Supabase connection', module: 'Backend', status: 'Completed', priority: 'High' },
-  { task_name: 'Create database schema', module: 'Backend', status: 'Completed', priority: 'High' },
-  { task_name: 'Build authentication system', module: 'Auth', status: 'Not Started', priority: 'High' },
-  { task_name: 'Trade execution UI', module: 'UI', status: 'Not Started', priority: 'High' },
-  { task_name: 'Signal generation flow', module: 'Trading', status: 'Not Started', priority: 'High' },
-  { task_name: 'Order lifecycle tracking', module: 'Trading', status: 'Not Started', priority: 'Medium' },
-  { task_name: 'Portfolio management', module: 'Trading', status: 'Not Started', priority: 'Medium' },
-  { task_name: 'Market data integration', module: 'Data', status: 'Not Started', priority: 'Medium' },
-  { task_name: 'Price updates', module: 'Data', status: 'Not Started', priority: 'Medium' },
-  { task_name: 'Data caching', module: 'Data', status: 'Not Started', priority: 'Low' },
-  { task_name: 'Trade validation rules', module: 'Risk', status: 'Not Started', priority: 'High' },
-  { task_name: 'Risk alerts', module: 'Risk', status: 'Not Started', priority: 'High' },
-  { task_name: 'Exposure limits', module: 'Risk', status: 'Not Started', priority: 'Medium' },
-  { task_name: 'Dashboard page', module: 'UI', status: 'Not Started', priority: 'High' },
-  { task_name: 'Trade console', module: 'UI', status: 'Not Started', priority: 'High' },
-  { task_name: 'Alerts page', module: 'UI', status: 'Not Started', priority: 'Medium' },
-  { task_name: 'Strategy page', module: 'UI', status: 'Not Started', priority: 'Medium' },
-  { task_name: 'Analytics page', module: 'UI', status: 'Not Started', priority: 'Low' },
-  { task_name: 'AI assistant', module: 'UI', status: 'Not Started', priority: 'Low' },
+  { task_name: 'Setup project structure', module: 'Backend' as const, status: 'Completed' as const, priority: 'High' as const },
+  { task_name: 'Setup Supabase connection', module: 'Backend' as const, status: 'Completed' as const, priority: 'High' as const },
+  { task_name: 'Create database schema', module: 'Backend' as const, status: 'Completed' as const, priority: 'High' as const },
+  { task_name: 'Build authentication system', module: 'Auth' as const, status: 'Completed' as const, priority: 'High' as const },
+  { task_name: 'Trade execution UI', module: 'UI' as const, status: 'Not Started' as const, priority: 'High' as const },
+  { task_name: 'Signal generation flow', module: 'Trading' as const, status: 'Not Started' as const, priority: 'High' as const },
+  { task_name: 'Order lifecycle tracking', module: 'Trading' as const, status: 'Not Started' as const, priority: 'Medium' as const },
+  { task_name: 'Portfolio management', module: 'Trading' as const, status: 'Not Started' as const, priority: 'Medium' as const },
+  { task_name: 'Market data integration', module: 'Data' as const, status: 'Not Started' as const, priority: 'Medium' as const },
+  { task_name: 'Price updates', module: 'Data' as const, status: 'Not Started' as const, priority: 'Medium' as const },
+  { task_name: 'Data caching', module: 'Data' as const, status: 'Not Started' as const, priority: 'Low' as const },
+  { task_name: 'Trade validation rules', module: 'Risk' as const, status: 'Not Started' as const, priority: 'High' as const },
+  { task_name: 'Risk alerts', module: 'Risk' as const, status: 'Not Started' as const, priority: 'High' as const },
+  { task_name: 'Exposure limits', module: 'Risk' as const, status: 'Not Started' as const, priority: 'Medium' as const },
+  { task_name: 'Dashboard page', module: 'UI' as const, status: 'Completed' as const, priority: 'High' as const },
+  { task_name: 'Trade console', module: 'UI' as const, status: 'Completed' as const, priority: 'High' as const },
+  { task_name: 'Alerts page', module: 'UI' as const, status: 'Completed' as const, priority: 'Medium' as const },
+  { task_name: 'Strategy page', module: 'UI' as const, status: 'Completed' as const, priority: 'Medium' as const },
+  { task_name: 'Analytics page', module: 'UI' as const, status: 'Completed' as const, priority: 'Low' as const },
+  { task_name: 'AI assistant', module: 'UI' as const, status: 'Not Started' as const, priority: 'Low' as const },
+  { task_name: 'Admin Panel', module: 'UI' as const, status: 'In Progress' as const, priority: 'High' as const, notes: 'Building admin panel with role management and cross-user analytics' },
 ];
 
 const statusColors: Record<string, string> = {
@@ -57,13 +58,51 @@ const BuildTracker = () => {
     if (!data || data.length === 0) {
       // Seed tasks
       const { error: seedErr } = await supabase.from('build_tasks').insert(
-        SEED_TASKS.map(t => ({ ...t, user_id: user.id, notes: '' }))
+        SEED_TASKS.map(t => ({ task_name: t.task_name, module: t.module, status: t.status, priority: t.priority, notes: ('notes' in t ? t.notes : '') || '', user_id: user.id }))
       );
       if (seedErr) { toast.error(seedErr.message); return; }
       fetchTasks();
       return;
     }
-    setTasks(data);
+
+    // Sync statuses for existing tasks: update completed/in-progress tasks
+    const statusUpdates: Record<string, string> = {
+      'Setup project structure': 'Completed',
+      'Setup Supabase connection': 'Completed',
+      'Create database schema': 'Completed',
+      'Build authentication system': 'Completed',
+      'Dashboard page': 'Completed',
+      'Trade console': 'Completed',
+      'Alerts page': 'Completed',
+      'Strategy page': 'Completed',
+      'Analytics page': 'Completed',
+    };
+
+    let needsRefresh = false;
+    for (const task of data) {
+      if (statusUpdates[task.task_name] && task.status !== statusUpdates[task.task_name]) {
+        const updateData: { status?: string } = { status: statusUpdates[task.task_name] };
+        await supabase.from('build_tasks').update(updateData).eq('id', task.id);
+        needsRefresh = true;
+      }
+    }
+
+    // Check if Admin Panel task exists, if not insert it
+    const hasAdminTask = data.some(t => t.task_name === 'Admin Panel');
+    if (!hasAdminTask) {
+      await supabase.from('build_tasks').insert({
+        task_name: 'Admin Panel', module: 'UI', status: 'In Progress', priority: 'High',
+        notes: 'Building admin panel with role management and cross-user analytics', user_id: user.id,
+      });
+      needsRefresh = true;
+    }
+
+    if (needsRefresh) {
+      const { data: refreshed } = await supabase.from('build_tasks').select('*').eq('user_id', user.id).order('updated_at', { ascending: false });
+      setTasks(refreshed || []);
+    } else {
+      setTasks(data);
+    }
   };
 
   useEffect(() => { fetchTasks(); }, [user]);
@@ -90,11 +129,11 @@ const BuildTracker = () => {
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card className="card-glow"><CardContent className="pt-6"><p className="text-sm text-muted-foreground">Total Tasks</p><p className="text-3xl font-bold font-mono text-primary">{total}</p></CardContent></Card>
-        <Card className="card-glow"><CardContent className="pt-6"><p className="text-sm text-muted-foreground">Completed</p><p className="text-3xl font-bold font-mono text-emerald-400">{completed}</p></CardContent></Card>
-        <Card className="card-glow"><CardContent className="pt-6"><p className="text-sm text-muted-foreground">In Progress</p><p className="text-3xl font-bold font-mono text-yellow-400">{inProgress}</p></CardContent></Card>
+        <Card className="card-glow"><CardContent className="pt-6"><p className="text-sm text-muted-foreground">Completed</p><p className="text-3xl font-bold font-mono text-primary">{completed}</p></CardContent></Card>
+        <Card className="card-glow"><CardContent className="pt-6"><p className="text-sm text-muted-foreground">In Progress</p><p className="text-3xl font-bold font-mono text-primary">{inProgress}</p></CardContent></Card>
       </div>
 
-      <div className="flex gap-4">
+      <div className="flex gap-4 flex-wrap">
         <Select value={filterModule} onValueChange={setFilterModule}>
           <SelectTrigger className="w-40"><SelectValue placeholder="Module" /></SelectTrigger>
           <SelectContent>
@@ -113,7 +152,7 @@ const BuildTracker = () => {
 
       <Card className="card-glow">
         <CardContent className="pt-6">
-          <div className="table-striped">
+          <div className="table-striped overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -147,7 +186,7 @@ const BuildTracker = () => {
                     </TableCell>
                     <TableCell>
                       <Input
-                        className="h-8 text-xs"
+                        className="h-8 text-xs min-w-[150px]"
                         value={t.notes || ''}
                         placeholder="Add notes..."
                         onChange={e => setTasks(prev => prev.map(x => x.id === t.id ? { ...x, notes: e.target.value } : x))}
