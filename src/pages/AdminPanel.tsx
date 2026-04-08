@@ -89,16 +89,8 @@ const AdminPanel = () => {
     }
     const newRole = currentRole === 'admin' ? 'user' : 'admin';
     try {
-      if (roleId) {
-        // The role column is an enum, we need to use RPC or raw update
-        const { error } = await supabase.rpc('update_user_role' as any, { _user_id: userId, _new_role: newRole });
-        if (error) {
-          // Fallback: delete and re-insert
-          await supabase.from('user_roles').delete().eq('id', roleId);
-          const { error: insertErr } = await supabase.from('user_roles').insert({ user_id: userId, role: newRole as any });
-          if (insertErr) throw insertErr;
-        }
-      }
+      const { error } = await supabase.rpc('update_user_role', { _user_id: userId, _new_role: newRole });
+      if (error) throw error;
       toast.success(`Role updated to ${newRole}`);
       loadData();
     } catch (err: any) {
