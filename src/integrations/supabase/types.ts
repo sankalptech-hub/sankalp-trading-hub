@@ -41,6 +41,136 @@ export type Database = {
         }
         Relationships: []
       }
+      broker_accounts: {
+        Row: {
+          account_id: string
+          account_type: string
+          balance: number
+          broker_id: string
+          currency: string
+          id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          account_id?: string
+          account_type?: string
+          balance?: number
+          broker_id: string
+          currency?: string
+          id?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          account_id?: string
+          account_type?: string
+          balance?: number
+          broker_id?: string
+          currency?: string
+          id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "broker_accounts_broker_id_fkey"
+            columns: ["broker_id"]
+            isOneToOne: false
+            referencedRelation: "brokers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      broker_orders: {
+        Row: {
+          broker_id: string
+          created_at: string
+          external_order_id: string | null
+          filled_price: number | null
+          id: string
+          order_type: string
+          price: number
+          qty: number
+          side: string
+          status: string
+          symbol: string
+          user_id: string
+        }
+        Insert: {
+          broker_id: string
+          created_at?: string
+          external_order_id?: string | null
+          filled_price?: number | null
+          id?: string
+          order_type?: string
+          price?: number
+          qty: number
+          side: string
+          status?: string
+          symbol: string
+          user_id: string
+        }
+        Update: {
+          broker_id?: string
+          created_at?: string
+          external_order_id?: string | null
+          filled_price?: number | null
+          id?: string
+          order_type?: string
+          price?: number
+          qty?: number
+          side?: string
+          status?: string
+          symbol?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "broker_orders_broker_id_fkey"
+            columns: ["broker_id"]
+            isOneToOne: false
+            referencedRelation: "brokers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      brokers: {
+        Row: {
+          broker_name: string
+          config_json: Json | null
+          created_at: string
+          display_name: string
+          id: string
+          is_default: boolean
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          broker_name: string
+          config_json?: Json | null
+          created_at?: string
+          display_name: string
+          id?: string
+          is_default?: boolean
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          broker_name?: string
+          config_json?: Json | null
+          created_at?: string
+          display_name?: string
+          id?: string
+          is_default?: boolean
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       build_tasks: {
         Row: {
           id: string
@@ -74,8 +204,34 @@ export type Database = {
         }
         Relationships: []
       }
+      integrations: {
+        Row: {
+          config_json: Json | null
+          id: string
+          provider: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          config_json?: Json | null
+          id?: string
+          provider?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          config_json?: Json | null
+          id?: string
+          provider?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       orders: {
         Row: {
+          broker_id: string | null
+          broker_name: string | null
           created_at: string
           id: string
           qty: number
@@ -86,6 +242,8 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          broker_id?: string | null
+          broker_name?: string | null
           created_at?: string
           id?: string
           qty: number
@@ -96,6 +254,8 @@ export type Database = {
           user_id: string
         }
         Update: {
+          broker_id?: string | null
+          broker_name?: string | null
           created_at?: string
           id?: string
           qty?: number
@@ -105,7 +265,15 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "orders_broker_id_fkey"
+            columns: ["broker_id"]
+            isOneToOne: false
+            referencedRelation: "brokers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       positions: {
         Row: {
@@ -156,6 +324,36 @@ export type Database = {
           created_at?: string
           display_name?: string | null
           id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      risk_config: {
+        Row: {
+          daily_loss_limit: number
+          id: string
+          max_concentration_pct: number
+          max_position_pct: number
+          max_positions: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          daily_loss_limit?: number
+          id?: string
+          max_concentration_pct?: number
+          max_position_pct?: number
+          max_positions?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          daily_loss_limit?: number
+          id?: string
+          max_concentration_pct?: number
+          max_position_pct?: number
+          max_positions?: number
           updated_at?: string
           user_id?: string
         }
