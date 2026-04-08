@@ -6,6 +6,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { TrendingUp, ShoppingCart, Radio, Bell } from 'lucide-react';
 import { toast } from 'sonner';
+import { fetchPrice, PriceData } from '@/lib/marketData';
+
+const WATCHLIST = ['AAPL', 'MSFT', 'TSLA', 'GOOGL', 'AMZN'];
+
+const statusColor: Record<string, string> = {
+  pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+  filled: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+  cancelled: 'bg-red-500/20 text-red-400 border-red-500/30',
+};
 
 const Dashboard = () => {
   const { user } = useAuth();
@@ -13,6 +22,7 @@ const Dashboard = () => {
   const [orders, setOrders] = useState<any[]>([]);
   const [signals, setSignals] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [watchlist, setWatchlist] = useState<Record<string, PriceData & { symbol: string }>>({});
 
   const fetchAll = async () => {
     if (!user) return;
@@ -36,17 +46,30 @@ const Dashboard = () => {
     }
   };
 
+  const fetchWatchlist = async () => {
+    const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_KEY;
+    if (!apiKey) return;
+    for (const sym of WATCHLIST) {
+      try {
+        const data = await fetchPrice(sym, apiKey);
+        setWatchlist(prev => ({ ...prev, [sym]: { ...data, symbol: sym } }));
+      } catch { /* skip failed lookups */ }
+    }
+  };
+
   useEffect(() => {
     fetchAll();
+    fetchWatchlist();
     const interval = setInterval(fetchAll, 10000);
-    return () => clearInterval(interval);
+    const watchInterval = setInterval(fetchWatchlist, 30000);
+    return () => { clearInterval(interval); clearInterval(watchInterval); };
   }, [user]);
 
   const stats = [
     { label: 'Open Positions', value: positions.length, icon: TrendingUp, color: 'text-primary' },
-    { label: 'Pending Orders', value: orders.filter(o => o.status === 'pending').length, icon: ShoppingCart, color: 'text-[hsl(var(--warning))]' },
+    { label: 'Pending Orders', value: orders.filter(o => o.status === 'pending').length, icon: ShoppingCart, color: 'text-yellow-400' },
     { label: 'Active Signals', value: signals.length, icon: Radio, color: 'text-primary' },
-    { label: 'Unread Alerts', value: alerts.length, icon: Bell, color: 'text-[hsl(var(--destructive))]' },
+    { label: 'Unread Alerts', value: alerts.length, icon: Bell, color: 'text-destructive' },
   ];
 
   return (
@@ -67,6 +90,36 @@ const Dashboard = () => {
           </Card>
         ))}
       </div>
+
+      {/* Market Watchlist */}
+      {Object.keys(watchlist).length > 0 && (
+        <Card className="card-glow">
+          <CardHeader><CardTitle className="text-lg">Market Watchlist</CardTitle></CardHeader>
+          <CardContent>
+            <div className="table-striped">
+              <Table>
+                <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change %</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {WATCHLIST.map(sym => {
+                    const w = watchlist[sym];
+                    if (!w) return null;
+                    return (
+                      <TableRow key={sym}>
+                        <TableCell className="font-mono font-semibold">{sym}</TableCell>
+                        <TableCell className="font-mono">${w.price.toFixed(2)}</TableCell>
+                        <TableCell className={`font-mono ${w.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {w.changePercent >= 0 ? '+' : ''}{w.changePercent.toFixed(2)}%
+                        </TableCell>
+                        <TableCell>{w.cached && <span className="text-xs text-muted-foreground">(cached)</span>}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="card-glow">
@@ -99,7 +152,7 @@ const Dashboard = () => {
                         <TableCell className="font-mono">{o.symbol}</TableCell>
                         <TableCell><Badge variant={o.side === 'BUY' ? 'default' : 'destructive'}>{o.side}</Badge></TableCell>
                         <TableCell className="font-mono">{o.qty}</TableCell>
-                        <TableCell><Badge variant="outline">{o.status}</Badge></TableCell>
+                        <TableCell><span className={`px-2 py-0.5 rounded text-xs border ${statusColor[o.status] || ''}`}>{o.status}</span></TableCell>
                       </TableRow>
                     ))}
                 </TableBody>
