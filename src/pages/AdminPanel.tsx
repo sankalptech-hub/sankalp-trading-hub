@@ -78,7 +78,8 @@ const AdminPanel = () => {
   useEffect(() => { loadData(); }, [isAdmin]);
 
   if (loading) return <div className="flex items-center justify-center h-64 text-muted-foreground font-mono">Loading...</div>;
-  if (!isAdmin) return <Navigate to="/dashboard" replace />;
+  if (!isAdmin && user) return <Navigate to="/dashboard" replace />;
+  if (!user) return <Navigate to="/login" replace />;
 
   const getUserEmail = (userId: string) => profileMap[userId] || userId.slice(0, 8) + '...';
 

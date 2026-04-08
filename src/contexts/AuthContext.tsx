@@ -26,41 +26,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const checkAdminRole = async (userId: string) => {
+    try {
+      const { data } = await supabase
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', userId);
+      setIsAdmin(!!data && data.some(r => r.role === 'admin'));
+    } catch {
+      setIsAdmin(false);
+    }
+  };
+
   useEffect(() => {
     // Seed admin user on first app load (idempotent)
     supabase.functions.invoke('seed-admin', { method: 'POST' }).catch(() => {});
 
+    let mounted = true;
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
       setSession(session);
       setUser(session?.user ?? null);
+      setLoading(false);
       if (session?.user) {
-        setTimeout(() => checkAdminRole(session.user.id), 0);
+        // Check admin role after setting loading=false so UI isn't blocked
+        checkAdminRole(session.user.id);
       } else {
         setIsAdmin(false);
       }
-      setLoading(false);
     });
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!mounted) return;
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        checkAdminRole(session.user.id);
+        await checkAdminRole(session.user.id);
       }
       setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => { mounted = false; subscription.unsubscribe(); };
   }, []);
-
-  const checkAdminRole = async (userId: string) => {
-    const { data } = await supabase
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', userId)
-      .eq('role', 'admin');
-    setIsAdmin(!!data && data.length > 0);
-  };
 
   const signOut = async () => {
     await supabase.auth.signOut();

@@ -49,60 +49,63 @@ const BuildTracker = () => {
   const [tasks, setTasks] = useState<any[]>([]);
   const [filterModule, setFilterModule] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [seeded, setSeeded] = useState(false);
 
-  const fetchTasks = async () => {
+  const fetchTasks = async (skipSync = false) => {
     if (!user) return;
     const { data, error } = await supabase.from('build_tasks').select('*').eq('user_id', user.id).order('updated_at', { ascending: false });
     if (error) { toast.error(error.message); return; }
 
     if (!data || data.length === 0) {
-      // Seed tasks
+      if (seeded) { setTasks([]); return; }
+      setSeeded(true);
       const { error: seedErr } = await supabase.from('build_tasks').insert(
         SEED_TASKS.map(t => ({ task_name: t.task_name, module: t.module, status: t.status, priority: t.priority, notes: ('notes' in t ? t.notes : '') || '', user_id: user.id }))
       );
       if (seedErr) { toast.error(seedErr.message); return; }
-      fetchTasks();
+      fetchTasks(true);
       return;
     }
 
-    // Sync statuses for existing tasks: update completed/in-progress tasks
-    const statusUpdates: Record<string, string> = {
-      'Setup project structure': 'Completed',
-      'Setup Supabase connection': 'Completed',
-      'Create database schema': 'Completed',
-      'Build authentication system': 'Completed',
-      'Dashboard page': 'Completed',
-      'Trade console': 'Completed',
-      'Alerts page': 'Completed',
-      'Strategy page': 'Completed',
-      'Analytics page': 'Completed',
-    };
+    if (!skipSync && !seeded) {
+      setSeeded(true);
+      // One-time sync statuses
+      const statusUpdates: Record<string, string> = {
+        'Setup project structure': 'Completed',
+        'Setup Supabase connection': 'Completed',
+        'Create database schema': 'Completed',
+        'Build authentication system': 'Completed',
+        'Dashboard page': 'Completed',
+        'Trade console': 'Completed',
+        'Alerts page': 'Completed',
+        'Strategy page': 'Completed',
+        'Analytics page': 'Completed',
+      };
 
-    let needsRefresh = false;
-    for (const task of data) {
-      if (statusUpdates[task.task_name] && task.status !== statusUpdates[task.task_name]) {
-        const updateData: { status?: string } = { status: statusUpdates[task.task_name] };
-        await supabase.from('build_tasks').update(updateData).eq('id', task.id);
+      let needsRefresh = false;
+      for (const task of data) {
+        if (statusUpdates[task.task_name] && task.status !== statusUpdates[task.task_name]) {
+          await supabase.from('build_tasks').update({ status: statusUpdates[task.task_name] } as { status?: string }).eq('id', task.id);
+          needsRefresh = true;
+        }
+      }
+
+      const hasAdminTask = data.some(t => t.task_name === 'Admin Panel');
+      if (!hasAdminTask) {
+        await supabase.from('build_tasks').insert({
+          task_name: 'Admin Panel', module: 'UI', status: 'In Progress', priority: 'High',
+          notes: 'Building admin panel with role management and cross-user analytics', user_id: user.id,
+        });
         needsRefresh = true;
+      }
+
+      if (needsRefresh) {
+        fetchTasks(true);
+        return;
       }
     }
 
-    // Check if Admin Panel task exists, if not insert it
-    const hasAdminTask = data.some(t => t.task_name === 'Admin Panel');
-    if (!hasAdminTask) {
-      await supabase.from('build_tasks').insert({
-        task_name: 'Admin Panel', module: 'UI', status: 'In Progress', priority: 'High',
-        notes: 'Building admin panel with role management and cross-user analytics', user_id: user.id,
-      });
-      needsRefresh = true;
-    }
-
-    if (needsRefresh) {
-      const { data: refreshed } = await supabase.from('build_tasks').select('*').eq('user_id', user.id).order('updated_at', { ascending: false });
-      setTasks(refreshed || []);
-    } else {
-      setTasks(data);
-    }
+    setTasks(data);
   };
 
   useEffect(() => { fetchTasks(); }, [user]);
