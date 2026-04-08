@@ -140,9 +140,11 @@ export type Database = {
           broker_name: string
           config_json: Json | null
           created_at: string
+          credentials_reset_at: string | null
           display_name: string
           id: string
           is_default: boolean
+          static_ip: string | null
           status: string
           updated_at: string
           user_id: string
@@ -151,9 +153,11 @@ export type Database = {
           broker_name: string
           config_json?: Json | null
           created_at?: string
+          credentials_reset_at?: string | null
           display_name: string
           id?: string
           is_default?: boolean
+          static_ip?: string | null
           status?: string
           updated_at?: string
           user_id: string
@@ -162,9 +166,11 @@ export type Database = {
           broker_name?: string
           config_json?: Json | null
           created_at?: string
+          credentials_reset_at?: string | null
           display_name?: string
           id?: string
           is_default?: boolean
+          static_ip?: string | null
           status?: string
           updated_at?: string
           user_id?: string
