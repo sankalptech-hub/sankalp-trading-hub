@@ -14,14 +14,39 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // Require a valid service-role or admin JWT to invoke this function
+    const authHeader = req.headers.get("authorization") ?? "";
+    const token = authHeader.replace("Bearer ", "");
+    if (!token || (token !== serviceRoleKey && token !== Deno.env.get("SUPABASE_ANON_KEY"))) {
+      // Verify caller is authenticated
+      const verifyClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+        global: { headers: { Authorization: authHeader } },
+      });
+      const { data: { user }, error: authErr } = await verifyClient.auth.getUser();
+      if (authErr || !user) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const supabase = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    const adminEmail = Deno.env.get("ADMIN_SEED_EMAIL") || "admin@sankalptrading.com";
-    const adminPassword = Deno.env.get("ADMIN_SEED_PASSWORD") || "Admin@123456";
+    const adminEmail = Deno.env.get("ADMIN_SEED_EMAIL");
+    const adminPassword = Deno.env.get("ADMIN_SEED_PASSWORD");
 
-    // Check if any admin already exists — if so, skip entirely
+    if (!adminEmail || !adminPassword) {
+      return new Response(
+        JSON.stringify({ error: "ADMIN_SEED_EMAIL and ADMIN_SEED_PASSWORD secrets must be configured" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Check if any admin already exists
     const { data: existingRoles } = await supabase
       .from("user_roles")
       .select("id")
@@ -35,7 +60,6 @@ serve(async (req) => {
       );
     }
 
-    // Create admin user
     const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
       email: adminEmail,
       password: adminPassword,
@@ -47,16 +71,9 @@ serve(async (req) => {
 
     const userId = newUser.user.id;
 
-    const { error: roleError } = await supabase
+    await supabase
       .from("user_roles")
-      .update({ role: "admin" })
-      .eq("user_id", userId);
-
-    if (roleError) {
-      await supabase
-        .from("user_roles")
-        .upsert({ user_id: userId, role: "admin" }, { onConflict: "user_id,role" });
-    }
+      .upsert({ user_id: userId, role: "admin" }, { onConflict: "user_id,role" });
 
     return new Response(
       JSON.stringify({ message: "Admin user created", created: true }),

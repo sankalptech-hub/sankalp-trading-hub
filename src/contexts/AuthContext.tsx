@@ -39,9 +39,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    // Seed admin user on first app load (idempotent)
-    supabase.functions.invoke('seed-admin', { method: 'POST' }).catch(() => {});
-
     let mounted = true;
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
