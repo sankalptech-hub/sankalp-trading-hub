@@ -9,6 +9,7 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Trade from "./pages/Trade";
 import Scanner from "./pages/Scanner";
+import Watchlist from "./pages/Watchlist";
 import Builder from "./pages/Builder";
 import Backtest from "./pages/Backtest";
 import Strategies from "./pages/Strategies";
@@ -39,6 +40,7 @@ const App = () => (
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/trade" element={<Trade />} />
                 <Route path="/scanner" element={<Scanner />} />
+                <Route path="/watchlist" element={<Watchlist />} />
                 <Route path="/builder" element={<Builder />} />
                 <Route path="/backtest" element={<Backtest />} />
                 <Route path="/strategies" element={<Strategies />} />
