@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, TrendingUp, Radar, Bookmark, Wrench, BarChart3, Layers, Clock,
   PieChart, Shield, Plug, Bell, Bot, ListChecks, Settings, LogOut,
-  ShieldCheck, Sun, Moon,
+  ShieldCheck, Sun, Moon, Activity,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
@@ -30,6 +30,7 @@ const strategyItems = [
 const portfolioItems = [
   { title: 'History', url: '/history', icon: Clock },
   { title: 'Analytics', url: '/analytics', icon: PieChart },
+  { title: 'Asset Analysis', url: '/asset-analysis', icon: Activity },
   { title: 'Risk', url: '/risk', icon: Shield },
 ];
 
