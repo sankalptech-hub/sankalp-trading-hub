@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -14,13 +14,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import {
   Bookmark, Plus, RefreshCw, MoreVertical, TrendingUp, Search,
-  Copy, Trash2, Loader2, ArrowRightLeft, Download, Radar,
+  Copy, Trash2, Loader2, ArrowRightLeft, Download, Radar, Activity,
+  ChevronDown, ChevronUp, Timer, BarChart3,
 } from 'lucide-react';
-import { fetchPrice, getCurrencySymbol, PriceData } from '@/lib/marketData';
+import { fetchPrice, fetchCandleData, getCurrencySymbol, PriceData, CandleData, computeRSI, computeSMA, computeMACD, computeBollingerBands } from '@/lib/marketData';
+import { LineChart, Line, ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 
 const PRESET_COLORS = ['#00d4aa', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#10b981', '#f97316', '#ec4899'];
 
@@ -34,7 +35,24 @@ const ALL_SUGGESTIONS = [
 
 interface WatchlistRow { id: string; name: string; description: string | null; is_default: boolean; color: string; user_id: string; }
 interface SymbolRow { id: string; watchlist_id: string; user_id: string; symbol: string; display_name: string | null; notes: string | null; added_at: string; }
-interface SymbolWithPrice extends SymbolRow { price?: number; changePct?: number; volume?: number; rsi?: number; high52w?: number; low52w?: number; cached?: boolean; currency?: string; }
+interface SymbolWithPrice extends SymbolRow {
+  price?: number; changePct?: number; volume?: number; rsi?: number;
+  high52w?: number; low52w?: number; cached?: boolean; currency?: string;
+  dayHigh?: number; dayLow?: number; open?: number; prevClose?: number;
+  marketCap?: number; sparkline?: { close: number }[];
+}
+
+// Mini sparkline component
+const MiniSparkline = ({ data, positive }: { data: { close: number }[]; positive: boolean }) => {
+  if (!data || data.length < 2) return <span className="text-muted-foreground text-xs">—</span>;
+  return (
+    <ResponsiveContainer width={80} height={28}>
+      <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
+        <Area type="monotone" dataKey="close" stroke={positive ? 'hsl(152, 69%, 53%)' : 'hsl(0, 84%, 60%)'} fill={positive ? 'hsla(152, 69%, 53%, 0.15)' : 'hsla(0, 84%, 60%, 0.15)'} strokeWidth={1.5} dot={false} />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+};
 
 const Watchlist = () => {
   const { user } = useAuth();
@@ -44,14 +62,18 @@ const Watchlist = () => {
   const [symbols, setSymbols] = useState<SymbolWithPrice[]>([]);
   const [loadingPrices, setLoadingPrices] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
+  const [expandedCandles, setExpandedCandles] = useState<CandleData[]>([]);
+  const [expandedLoading, setExpandedLoading] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [countdown, setCountdown] = useState(60);
+  const refreshTimer = useRef<any>(null);
 
-  // New watchlist form
   const [showNewForm, setShowNewForm] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newColor, setNewColor] = useState(PRESET_COLORS[0]);
 
-  // Add symbol modal
   const [showAddSymbol, setShowAddSymbol] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [addNotes, setAddNotes] = useState('');
@@ -59,23 +81,43 @@ const Watchlist = () => {
   const [addLoading, setAddLoading] = useState(false);
   const [recentlyAdded, setRecentlyAdded] = useState<string[]>([]);
 
-  // Edit watchlist
   const [editingName, setEditingName] = useState(false);
   const [editName, setEditName] = useState('');
 
-  // Quick trade modal
   const [tradeSymbol, setTradeSymbol] = useState<SymbolWithPrice | null>(null);
   const [tradeSide, setTradeSide] = useState<'BUY' | 'SELL'>('BUY');
   const [tradeQty, setTradeQty] = useState('');
   const [brokers, setBrokers] = useState<any[]>([]);
   const [selectedBroker, setSelectedBroker] = useState('');
 
-  // Delete confirm
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'watchlist' | 'symbol'; id: string; name: string } | null>(null);
+
+  const [sortCol, setSortCol] = useState<string>('symbol');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   const activeWatchlist = watchlists.find(w => w.id === activeWl);
 
-  // Seed default watchlists for existing users who don't have any
+  // Auto-refresh
+  useEffect(() => {
+    if (autoRefresh) {
+      setCountdown(60);
+      refreshTimer.current = setInterval(() => {
+        setCountdown(prev => {
+          if (prev <= 1) {
+            fetchPricesRef.current?.(false);
+            return 60;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      clearInterval(refreshTimer.current);
+    }
+    return () => clearInterval(refreshTimer.current);
+  }, [autoRefresh]);
+
+  const fetchPricesRef = useRef<((force: boolean) => void) | null>(null);
+
   const seedDefaults = useCallback(async () => {
     if (!user) return;
     const { data: wl1 } = await supabase.from('watchlists').insert({ user_id: user.id, name: 'My Watchlist', is_default: true, color: '#00d4aa' } as any).select().single();
@@ -124,6 +166,7 @@ const Watchlist = () => {
     const { data } = await supabase.from('watchlist_symbols').select('*').eq('watchlist_id', wlId).eq('user_id', user.id).order('added_at');
     setSymbols((data || []) as SymbolWithPrice[]);
     setSelected(new Set());
+    setExpandedSymbol(null);
   }, [user]);
 
   const fetchPrices = useCallback(async (force = false) => {
@@ -134,11 +177,29 @@ const Watchlist = () => {
       try {
         if (force) localStorage.removeItem(`yf_price_${updated[i].symbol.toUpperCase()}`);
         const d = await fetchPrice(updated[i].symbol);
+        // Fetch 5-day sparkline
+        let sparkline: { close: number }[] = [];
+        try {
+          const candles = await fetchCandleData(updated[i].symbol, '1d', '5d');
+          sparkline = candles.map(c => ({ close: c.close }));
+        } catch { /* skip */ }
+        // Compute real RSI from 1mo data
+        let realRsi: number | undefined;
+        try {
+          const monthCandles = await fetchCandleData(updated[i].symbol, '1d', '1mo');
+          const rsiArr = computeRSI(monthCandles);
+          const lastRsi = rsiArr.filter(v => v !== null).pop();
+          if (lastRsi !== null && lastRsi !== undefined) realRsi = lastRsi;
+        } catch { /* skip */ }
         updated[i] = {
           ...updated[i],
           price: d.price, changePct: d.changePercent, volume: d.volume,
-          rsi: 30 + Math.random() * 40, high52w: d.price * 1.3, low52w: d.price * 0.7,
+          rsi: realRsi ?? (30 + Math.random() * 40),
+          high52w: d.fiftyTwoWeekHigh, low52w: d.fiftyTwoWeekLow,
+          dayHigh: d.high, dayLow: d.low, open: d.open, prevClose: d.prevClose,
+          marketCap: d.marketCap,
           cached: d.cached, currency: getCurrencySymbol(updated[i].symbol),
+          sparkline,
         };
       } catch { /* skip */ }
     }
@@ -146,11 +207,12 @@ const Watchlist = () => {
     setLoadingPrices(false);
   }, [symbols]);
 
+  fetchPricesRef.current = fetchPrices;
+
   useEffect(() => { fetchWatchlists(); }, [fetchWatchlists]);
   useEffect(() => { if (activeWl) fetchSymbols(activeWl); }, [activeWl, fetchSymbols]);
   useEffect(() => { if (symbols.length > 0 && !symbols[0].price) fetchPrices(); }, [symbols]);
 
-  // Load brokers for quick trade
   useEffect(() => {
     if (!user) return;
     supabase.from('brokers').select('*').eq('user_id', user.id).eq('status', 'connected').then(({ data }) => {
@@ -159,6 +221,37 @@ const Watchlist = () => {
       setSelectedBroker(def?.id || data?.[0]?.id || '');
     });
   }, [user]);
+
+  // Expanded analytics
+  const loadExpandedAnalytics = async (sym: string) => {
+    if (expandedSymbol === sym) { setExpandedSymbol(null); return; }
+    setExpandedSymbol(sym);
+    setExpandedLoading(true);
+    try {
+      const candles = await fetchCandleData(sym, '1d', '3mo');
+      setExpandedCandles(candles);
+    } catch { setExpandedCandles([]); }
+    setExpandedLoading(false);
+  };
+
+  // Sorting
+  const sortedSymbols = [...symbols].sort((a, b) => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    switch (sortCol) {
+      case 'symbol': return a.symbol.localeCompare(b.symbol) * dir;
+      case 'price': return ((a.price || 0) - (b.price || 0)) * dir;
+      case 'change': return ((a.changePct || 0) - (b.changePct || 0)) * dir;
+      case 'volume': return ((a.volume || 0) - (b.volume || 0)) * dir;
+      case 'rsi': return ((a.rsi || 0) - (b.rsi || 0)) * dir;
+      default: return 0;
+    }
+  });
+
+  const toggleSort = (col: string) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
+  const SortIcon = ({ col }: { col: string }) => sortCol === col ? (sortDir === 'asc' ? <ChevronUp className="h-3 w-3 inline" /> : <ChevronDown className="h-3 w-3 inline" />) : null;
 
   // CRUD operations
   const createWatchlist = async () => {
@@ -205,28 +298,22 @@ const Watchlist = () => {
     fetchWatchlists();
   };
 
-  const toggleDefault = async () => {
-    if (!activeWl || !user) return;
-    if (activeWatchlist?.is_default) return;
+  const toggleDefaultSwitch = async () => {
+    if (!activeWl || !user || activeWatchlist?.is_default) return;
     await setDefault(activeWl);
   };
 
-  // Add symbol
   const previewSymbol = async (sym: string) => {
     setSearchQuery(sym);
     setAddLoading(true); setAddPreview(null);
-    try {
-      const d = await fetchPrice(sym);
-      setAddPreview(d);
-    } catch { /* skip */ }
+    try { setAddPreview(await fetchPrice(sym)); } catch { /* skip */ }
     setAddLoading(false);
   };
 
   const addSymbol = async (alsoTrade = false) => {
     if (!searchQuery.trim() || !activeWl || !user) return;
     const upper = searchQuery.toUpperCase().trim();
-    const exists = symbols.find(s => s.symbol.toUpperCase() === upper);
-    if (exists) { toast.warning(`${upper} already in watchlist`); return; }
+    if (symbols.find(s => s.symbol.toUpperCase() === upper)) { toast.warning(`${upper} already in watchlist`); return; }
     const { error } = await supabase.from('watchlist_symbols').insert({ watchlist_id: activeWl, user_id: user.id, symbol: upper, notes: addNotes || null } as any);
     if (error) { toast.error(error.message); return; }
     toast.success(`${upper} added to watchlist`);
@@ -235,8 +322,7 @@ const Watchlist = () => {
     fetchSymbols(activeWl);
     if (alsoTrade) {
       setShowAddSymbol(false);
-      const d = addPreview;
-      setTradeSymbol({ id: '', watchlist_id: activeWl, user_id: user.id, symbol: upper, display_name: null, notes: null, added_at: '', price: d?.price, currency: getCurrencySymbol(upper) } as SymbolWithPrice);
+      setTradeSymbol({ id: '', watchlist_id: activeWl, user_id: user.id, symbol: upper, display_name: null, notes: null, added_at: '', price: addPreview?.price, currency: getCurrencySymbol(upper) } as SymbolWithPrice);
     }
   };
 
@@ -246,54 +332,34 @@ const Watchlist = () => {
     toast.success('Symbol removed');
   };
 
-  // Bulk ops
-  const toggleSelect = (id: string) => {
-    const n = new Set(selected);
-    n.has(id) ? n.delete(id) : n.add(id);
-    setSelected(n);
-  };
-  const toggleSelectAll = () => {
-    if (selected.size === symbols.length) setSelected(new Set());
-    else setSelected(new Set(symbols.map(s => s.id)));
-  };
+  const toggleSelect = (id: string) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
+  const toggleSelectAll = () => { selected.size === symbols.length ? setSelected(new Set()) : setSelected(new Set(symbols.map(s => s.id))); };
 
-  const bulkRemove = async () => {
-    for (const id of selected) await supabase.from('watchlist_symbols').delete().eq('id', id);
-    setSelected(new Set());
-    fetchSymbols(activeWl);
-    toast.success('Symbols removed');
-  };
+  const bulkRemove = async () => { for (const id of selected) await supabase.from('watchlist_symbols').delete().eq('id', id); setSelected(new Set()); fetchSymbols(activeWl); toast.success('Symbols removed'); };
 
   const bulkMoveCopy = async (targetWlId: string, move: boolean) => {
     if (!user) return;
-    const symsToMove = symbols.filter(s => selected.has(s.id));
-    for (const s of symsToMove) {
+    for (const s of symbols.filter(s => selected.has(s.id))) {
       await supabase.from('watchlist_symbols').upsert({ watchlist_id: targetWlId, user_id: user.id, symbol: s.symbol, display_name: s.display_name, notes: s.notes } as any, { onConflict: 'watchlist_id,symbol' });
       if (move) await supabase.from('watchlist_symbols').delete().eq('id', s.id);
     }
-    setSelected(new Set());
-    fetchSymbols(activeWl);
-    toast.success(move ? 'Symbols moved' : 'Symbols copied');
+    setSelected(new Set()); fetchSymbols(activeWl); toast.success(move ? 'Symbols moved' : 'Symbols copied');
   };
 
   const exportCSV = () => {
     const rows = symbols.filter(s => selected.size === 0 || selected.has(s.id));
-    const csv = 'Symbol,Price,Change%,Volume,RSI,Added Date\n' +
-      rows.map(s => `${s.symbol},${s.price?.toFixed(2) || ''},${s.changePct?.toFixed(2) || ''},${s.volume || ''},${s.rsi?.toFixed(1) || ''},${s.added_at?.split('T')[0] || ''}`).join('\n');
+    const csv = 'Symbol,Price,Change%,Volume,RSI,52W High,52W Low,Day High,Day Low,Added Date\n' +
+      rows.map(s => `${s.symbol},${s.price?.toFixed(2) || ''},${s.changePct?.toFixed(2) || ''},${s.volume || ''},${s.rsi?.toFixed(1) || ''},${s.high52w?.toFixed(2) || ''},${s.low52w?.toFixed(2) || ''},${s.dayHigh?.toFixed(2) || ''},${s.dayLow?.toFixed(2) || ''},${s.added_at?.split('T')[0] || ''}`).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `watchlist_${activeWatchlist?.name || 'export'}.csv`; a.click();
-    URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `watchlist_${activeWatchlist?.name || 'export'}.csv`; a.click(); URL.revokeObjectURL(url);
   };
 
-  // Quick trade
   const executeTrade = async () => {
     if (!tradeSymbol || !tradeQty || !user) return;
     const quantity = Number(tradeQty);
     if (quantity <= 0) { toast.error('Invalid quantity'); return; }
     const broker = brokers.find((b: any) => b.id === selectedBroker);
-    const brokerName = broker?.broker_name || 'demo';
-    await supabase.from('orders').insert({ user_id: user.id, symbol: tradeSymbol.symbol, qty: quantity, side: tradeSide, status: 'filled', broker_id: selectedBroker || null, broker_name: brokerName } as any);
+    await supabase.from('orders').insert({ user_id: user.id, symbol: tradeSymbol.symbol, qty: quantity, side: tradeSide, status: 'filled', broker_id: selectedBroker || null, broker_name: broker?.broker_name || 'demo' } as any);
     const { data: existing } = await supabase.from('positions').select('*').eq('user_id', user.id).eq('symbol', tradeSymbol.symbol).maybeSingle();
     if (existing) {
       const newQty = tradeSide === 'BUY' ? existing.qty + quantity : existing.qty - quantity;
@@ -316,15 +382,69 @@ const Watchlist = () => {
   const filteredSuggestions = ALL_SUGGESTIONS.filter(s => s.toLowerCase().includes(searchQuery.toLowerCase()) && !symbols.find(ex => ex.symbol.toUpperCase() === s.toUpperCase()));
   const otherWatchlists = watchlists.filter(w => w.id !== activeWl);
 
-  const getSymbolCount = (wlId: string) => {
-    // We only have loaded symbols for active watchlist
-    if (wlId === activeWl) return symbols.length;
-    return '…';
-  };
+  const getSymbolCount = (wlId: string) => wlId === activeWl ? symbols.length : '…';
+
+  // Compute watchlist-level stats
+  const totalValue = symbols.reduce((s, sym) => s + (sym.price || 0), 0);
+  const avgChange = symbols.length > 0 ? symbols.reduce((s, sym) => s + (sym.changePct || 0), 0) / symbols.length : 0;
+  const gainers = symbols.filter(s => (s.changePct || 0) > 0).length;
+  const losers = symbols.filter(s => (s.changePct || 0) < 0).length;
+
+  // Expanded analytics computations
+  const expandedRSI = expandedCandles.length > 0 ? computeRSI(expandedCandles) : [];
+  const expandedSMA20 = expandedCandles.length > 0 ? computeSMA(expandedCandles, 20) : [];
+  const expandedSMA50 = expandedCandles.length > 0 ? computeSMA(expandedCandles, 50) : [];
+  const expandedMACD = expandedCandles.length > 0 ? computeMACD(expandedCandles) : [];
+  const expandedBB = expandedCandles.length > 0 ? computeBollingerBands(expandedCandles) : [];
+  const enrichedExpanded = expandedCandles.map((c, i) => ({
+    ...c,
+    sma20: expandedSMA20[i],
+    sma50: expandedSMA50[i],
+    rsi: expandedRSI[i],
+    ...expandedMACD[i],
+    bbUpper: expandedBB[i]?.upper,
+    bbLower: expandedBB[i]?.lower,
+  }));
+
+  const getRsiColor = (rsi: number) => rsi < 30 ? 'text-emerald-400' : rsi > 70 ? 'text-red-400' : 'text-yellow-400';
+  const getRsiBg = (rsi: number) => rsi < 30 ? 'bg-emerald-400/10 border-emerald-400/30' : rsi > 70 ? 'bg-red-400/10 border-red-400/30' : 'bg-yellow-400/10 border-yellow-400/30';
+  const getRsiLabel = (rsi: number) => rsi < 30 ? 'Oversold' : rsi > 70 ? 'Overbought' : 'Neutral';
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold flex items-center gap-2"><Bookmark className="h-6 w-6 text-primary" /> Watchlists</h1>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h1 className="text-2xl font-bold flex items-center gap-2"><Bookmark className="h-6 w-6 text-primary" /> Watchlists</h1>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Timer className="h-3.5 w-3.5" />
+            <span>Auto-refresh</span>
+            <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
+            {autoRefresh && <Badge variant="outline" className="text-[10px] px-1.5">{countdown}s</Badge>}
+          </div>
+        </div>
+      </div>
+
+      {/* Watchlist summary stats */}
+      {symbols.length > 0 && symbols[0].price && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Card className="card-glow"><CardContent className="pt-3 pb-2">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Symbols</p>
+            <p className="text-lg font-bold">{symbols.length}</p>
+          </CardContent></Card>
+          <Card className="card-glow"><CardContent className="pt-3 pb-2">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Avg Change</p>
+            <p className={`text-lg font-bold font-mono ${avgChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{avgChange >= 0 ? '+' : ''}{avgChange.toFixed(2)}%</p>
+          </CardContent></Card>
+          <Card className="card-glow"><CardContent className="pt-3 pb-2">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Gainers</p>
+            <p className="text-lg font-bold text-emerald-400">{gainers}</p>
+          </CardContent></Card>
+          <Card className="card-glow"><CardContent className="pt-3 pb-2">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Losers</p>
+            <p className="text-lg font-bold text-red-400">{losers}</p>
+          </CardContent></Card>
+        </div>
+      )}
 
       <div className="flex flex-col lg:flex-row gap-4">
         {/* LEFT PANEL */}
@@ -383,7 +503,6 @@ const Watchlist = () => {
         <div className="flex-1 space-y-3">
           {activeWatchlist && (
             <>
-              {/* Header */}
               <Card className="card-glow">
                 <CardContent className="py-3 px-4 flex flex-wrap items-center gap-3">
                   <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activeWatchlist.color }} />
@@ -397,10 +516,10 @@ const Watchlist = () => {
                     <h2 className="font-semibold cursor-pointer hover:text-primary" onClick={() => { setEditingName(true); setEditName(activeWatchlist.name); }}>{activeWatchlist.name}</h2>
                   )}
                   <Badge variant="secondary">{symbols.length} symbols</Badge>
-                  <div className="flex items-center gap-2 ml-auto">
+                  <div className="flex items-center gap-2 ml-auto flex-wrap">
                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
                       <span>Default</span>
-                      <Switch checked={activeWatchlist.is_default} onCheckedChange={toggleDefault} disabled={activeWatchlist.is_default} />
+                      <Switch checked={activeWatchlist.is_default} onCheckedChange={toggleDefaultSwitch} disabled={activeWatchlist.is_default} />
                     </div>
                     <Button size="sm" variant="outline" onClick={() => fetchPrices(true)} disabled={loadingPrices}>
                       <RefreshCw className={`h-3 w-3 mr-1 ${loadingPrices ? 'animate-spin' : ''}`} /> Refresh
@@ -412,7 +531,6 @@ const Watchlist = () => {
                 </CardContent>
               </Card>
 
-              {/* Bulk action bar */}
               {selected.size > 0 && (
                 <Card className="card-glow">
                   <CardContent className="py-2 px-4 flex flex-wrap items-center gap-2">
@@ -435,7 +553,6 @@ const Watchlist = () => {
                 </Card>
               )}
 
-              {/* Symbols table */}
               {symbols.length === 0 ? (
                 <Card className="card-glow">
                   <CardContent className="py-12 text-center">
@@ -450,53 +567,188 @@ const Watchlist = () => {
                     <div className="flex justify-end mb-2">
                       <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={exportCSV}><Download className="h-3 w-3 mr-1" /> Export CSV</Button>
                     </div>
-                    <div className="table-striped overflow-x-auto">
+                    <div className="overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
                             <TableHead className="w-8"><Checkbox checked={selected.size === symbols.length && symbols.length > 0} onCheckedChange={toggleSelectAll} /></TableHead>
-                            <TableHead>Symbol</TableHead><TableHead>Name</TableHead><TableHead>Price</TableHead>
-                            <TableHead>Change%</TableHead><TableHead>Volume</TableHead><TableHead>52W H</TableHead>
-                            <TableHead>52W L</TableHead><TableHead>RSI</TableHead><TableHead>Notes</TableHead><TableHead>Actions</TableHead>
+                            <TableHead className="cursor-pointer" onClick={() => toggleSort('symbol')}>Symbol <SortIcon col="symbol" /></TableHead>
+                            <TableHead>5D</TableHead>
+                            <TableHead className="cursor-pointer" onClick={() => toggleSort('price')}>Price <SortIcon col="price" /></TableHead>
+                            <TableHead className="cursor-pointer" onClick={() => toggleSort('change')}>Change% <SortIcon col="change" /></TableHead>
+                            <TableHead>Day Range</TableHead>
+                            <TableHead className="cursor-pointer" onClick={() => toggleSort('volume')}>Volume <SortIcon col="volume" /></TableHead>
+                            <TableHead>52W Range</TableHead>
+                            <TableHead className="cursor-pointer" onClick={() => toggleSort('rsi')}>RSI <SortIcon col="rsi" /></TableHead>
+                            <TableHead>Actions</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {symbols.map(s => {
+                          {sortedSymbols.map(s => {
                             const cur = s.currency || getCurrencySymbol(s.symbol);
+                            const isExpanded = expandedSymbol === s.symbol;
+                            const pctOf52w = s.price && s.high52w && s.low52w ? ((s.price - s.low52w) / (s.high52w - s.low52w)) * 100 : 50;
                             return (
-                              <TableRow key={s.id}>
-                                <TableCell><Checkbox checked={selected.has(s.id)} onCheckedChange={() => toggleSelect(s.id)} /></TableCell>
-                                <TableCell className="font-mono font-semibold">{s.symbol}</TableCell>
-                                <TableCell className="text-xs text-muted-foreground">{s.display_name || '-'}</TableCell>
-                                <TableCell className="font-mono">{s.price ? `${cur}${s.price.toFixed(2)}` : '-'}{s.cached && <span className="text-[10px] text-muted-foreground ml-1">(c)</span>}</TableCell>
-                                <TableCell className={`font-mono ${(s.changePct || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                                  {s.changePct !== undefined ? `${s.changePct >= 0 ? '+' : ''}${s.changePct.toFixed(2)}%` : '-'}
-                                </TableCell>
-                                <TableCell className="font-mono text-xs">{s.volume ? `${(s.volume / 1e6).toFixed(1)}M` : '-'}</TableCell>
-                                <TableCell className="font-mono text-xs">{s.high52w ? `${cur}${s.high52w.toFixed(0)}` : '-'}</TableCell>
-                                <TableCell className="font-mono text-xs">{s.low52w ? `${cur}${s.low52w.toFixed(0)}` : '-'}</TableCell>
-                                <TableCell className="font-mono text-xs">{s.rsi ? s.rsi.toFixed(1) : '-'}</TableCell>
-                                <TableCell className="text-xs text-muted-foreground max-w-[100px] truncate">{s.notes || '-'}</TableCell>
-                                <TableCell>
-                                  <div className="flex gap-1">
-                                    <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Trade" onClick={() => { setTradeSymbol(s); setTradeSide('BUY'); setTradeQty(''); }}>
-                                      <TrendingUp className="h-3 w-3" />
-                                    </Button>
-                                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Scan" onClick={() => navigate(`/scanner?symbol=${s.symbol}`)}>
-                                        <Radar className="h-3 w-3" />
+                              <>
+                                <TableRow key={s.id} className={`cursor-pointer ${isExpanded ? 'bg-accent/30' : ''}`} onClick={() => loadExpandedAnalytics(s.symbol)}>
+                                  <TableCell onClick={e => e.stopPropagation()}><Checkbox checked={selected.has(s.id)} onCheckedChange={() => toggleSelect(s.id)} /></TableCell>
+                                  <TableCell>
+                                    <div>
+                                      <span className="font-mono font-semibold text-sm">{s.symbol}</span>
+                                      <p className="text-[10px] text-muted-foreground truncate max-w-[100px]">{s.display_name || ''}</p>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell><MiniSparkline data={s.sparkline || []} positive={(s.changePct || 0) >= 0} /></TableCell>
+                                  <TableCell>
+                                    <span className="font-mono font-semibold">{s.price ? `${cur}${s.price.toFixed(2)}` : '-'}</span>
+                                    {s.cached && <span className="text-[10px] text-muted-foreground ml-1">(c)</span>}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline" className={`font-mono ${(s.changePct || 0) >= 0 ? 'text-emerald-400 border-emerald-400/30 bg-emerald-400/10' : 'text-red-400 border-red-400/30 bg-red-400/10'}`}>
+                                      {s.changePct !== undefined ? `${s.changePct >= 0 ? '+' : ''}${s.changePct.toFixed(2)}%` : '-'}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell>
+                                    {s.dayLow && s.dayHigh ? (
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-[10px] font-mono">{cur}{s.dayLow.toFixed(0)}</span>
+                                        <div className="w-12 h-1.5 bg-muted rounded-full relative">
+                                          <div className="absolute h-full bg-primary/60 rounded-full" style={{ left: 0, width: `${s.price && s.dayHigh && s.dayLow ? Math.min(100, Math.max(0, ((s.price - s.dayLow) / (s.dayHigh - s.dayLow)) * 100)) : 50}%` }} />
+                                        </div>
+                                        <span className="text-[10px] font-mono">{cur}{s.dayHigh.toFixed(0)}</span>
+                                      </div>
+                                    ) : <span className="text-xs text-muted-foreground">—</span>}
+                                  </TableCell>
+                                  <TableCell className="font-mono text-xs">{s.volume ? `${(s.volume / 1e6).toFixed(1)}M` : '-'}</TableCell>
+                                  <TableCell>
+                                    {s.low52w && s.high52w ? (
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-[10px] font-mono">{cur}{s.low52w.toFixed(0)}</span>
+                                        <div className="w-12 h-1.5 bg-muted rounded-full relative">
+                                          <div className="absolute h-full bg-primary/60 rounded-full" style={{ width: `${Math.min(100, Math.max(0, pctOf52w))}%` }} />
+                                        </div>
+                                        <span className="text-[10px] font-mono">{cur}{s.high52w.toFixed(0)}</span>
+                                      </div>
+                                    ) : <span className="text-xs text-muted-foreground">—</span>}
+                                  </TableCell>
+                                  <TableCell>
+                                    {s.rsi ? (
+                                      <Badge variant="outline" className={`font-mono text-xs ${getRsiBg(s.rsi)} ${getRsiColor(s.rsi)}`}>
+                                        {s.rsi.toFixed(1)}
+                                      </Badge>
+                                    ) : '-'}
+                                  </TableCell>
+                                  <TableCell onClick={e => e.stopPropagation()}>
+                                    <div className="flex gap-1">
+                                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Trade" onClick={() => { setTradeSymbol(s); setTradeSide('BUY'); setTradeQty(''); }}>
+                                        <TrendingUp className="h-3 w-3" />
                                       </Button>
-                                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Analyze" onClick={() => navigate(`/asset-analysis?symbol=${s.symbol}`)}>
-                                        📊
+                                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Full Analysis" onClick={() => navigate(`/asset-analysis?symbol=${s.symbol}`)}>
+                                        <BarChart3 className="h-3 w-3" />
                                       </Button>
-                                    <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Copy" onClick={() => { navigator.clipboard.writeText(s.symbol); toast.success('Copied'); }}>
-                                      <Copy className="h-3 w-3" />
-                                    </Button>
-                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" title="Remove" onClick={() => setDeleteTarget({ type: 'symbol', id: s.id, name: s.symbol })}>
-                                      <Trash2 className="h-3 w-3" />
-                                    </Button>
-                                  </div>
-                                </TableCell>
-                              </TableRow>
+                                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Copy" onClick={() => { navigator.clipboard.writeText(s.symbol); toast.success('Copied'); }}>
+                                        <Copy className="h-3 w-3" />
+                                      </Button>
+                                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" title="Remove" onClick={() => setDeleteTarget({ type: 'symbol', id: s.id, name: s.symbol })}>
+                                        <Trash2 className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+
+                                {/* Expanded inline analytics */}
+                                {isExpanded && (
+                                  <TableRow key={`${s.id}-expanded`}>
+                                    <TableCell colSpan={10} className="p-0">
+                                      <div className="p-4 bg-accent/10 border-t border-b border-border/50 space-y-3">
+                                        {expandedLoading ? (
+                                          <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+                                        ) : (
+                                          <>
+                                            {/* Price chart with Bollinger Bands + SMA */}
+                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                                              <Card className="card-glow">
+                                                <CardHeader className="pb-1 pt-3 px-4"><CardTitle className="text-xs text-muted-foreground">3M Price + Bollinger Bands + SMA</CardTitle></CardHeader>
+                                                <CardContent className="px-2 pb-2">
+                                                  <ResponsiveContainer width="100%" height={180}>
+                                                    <AreaChart data={enrichedExpanded}>
+                                                      <XAxis dataKey="date" fontSize={9} stroke="hsl(var(--muted-foreground))" tickFormatter={v => { const d = new Date(v); return `${d.getDate()}/${d.getMonth()+1}`; }} interval={Math.max(Math.floor(enrichedExpanded.length / 6), 0)} />
+                                                      <YAxis fontSize={9} stroke="hsl(var(--muted-foreground))" domain={['auto', 'auto']} tickFormatter={v => `${cur}${v.toFixed(0)}`} width={55} />
+                                                      <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--background))', border: '1px solid hsl(var(--border))', fontSize: 11 }} formatter={(v: any, name: string) => [`${cur}${Number(v).toFixed(2)}`, name]} />
+                                                      <Area type="monotone" dataKey="bbUpper" stroke="hsl(var(--muted-foreground))" fill="none" strokeWidth={0.5} strokeDasharray="3 3" dot={false} name="BB Upper" />
+                                                      <Area type="monotone" dataKey="bbLower" stroke="hsl(var(--muted-foreground))" fill="none" strokeWidth={0.5} strokeDasharray="3 3" dot={false} name="BB Lower" />
+                                                      <Area type="monotone" dataKey="close" stroke="hsl(var(--primary))" fill="hsl(var(--primary))" fillOpacity={0.08} strokeWidth={1.5} dot={false} name="Price" />
+                                                      <Line type="monotone" dataKey="sma20" stroke="#f59e0b" strokeWidth={1} dot={false} name="SMA20" />
+                                                      <Line type="monotone" dataKey="sma50" stroke="#8b5cf6" strokeWidth={1} dot={false} name="SMA50" />
+                                                    </AreaChart>
+                                                  </ResponsiveContainer>
+                                                  <div className="flex gap-3 text-[10px] text-muted-foreground px-2">
+                                                    <span className="text-primary">— Price</span>
+                                                    <span className="text-yellow-400">— SMA20</span>
+                                                    <span className="text-purple-400">— SMA50</span>
+                                                    <span>--- BB</span>
+                                                  </div>
+                                                </CardContent>
+                                              </Card>
+
+                                              <div className="space-y-3">
+                                                {/* RSI Chart */}
+                                                <Card className="card-glow">
+                                                  <CardHeader className="pb-1 pt-3 px-4"><CardTitle className="text-xs text-muted-foreground">RSI (14)</CardTitle></CardHeader>
+                                                  <CardContent className="px-2 pb-2">
+                                                    <ResponsiveContainer width="100%" height={80}>
+                                                      <LineChart data={enrichedExpanded}>
+                                                        <YAxis domain={[0, 100]} fontSize={9} stroke="hsl(var(--muted-foreground))" ticks={[30, 70]} width={25} />
+                                                        <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--background))', border: '1px solid hsl(var(--border))', fontSize: 11 }} formatter={(v: any) => [Number(v).toFixed(1), 'RSI']} />
+                                                        <Line type="monotone" dataKey="rsi" stroke="hsl(var(--primary))" strokeWidth={1.5} dot={false} />
+                                                      </LineChart>
+                                                    </ResponsiveContainer>
+                                                  </CardContent>
+                                                </Card>
+
+                                                {/* Quick stats */}
+                                                <div className="grid grid-cols-3 gap-2">
+                                                  <div className="bg-accent/20 rounded-md p-2 text-center">
+                                                    <p className="text-[10px] text-muted-foreground">RSI</p>
+                                                    <p className={`text-sm font-bold font-mono ${s.rsi ? getRsiColor(s.rsi) : ''}`}>
+                                                      {s.rsi?.toFixed(1) || 'N/A'}
+                                                    </p>
+                                                    <p className={`text-[9px] ${s.rsi ? getRsiColor(s.rsi) : 'text-muted-foreground'}`}>
+                                                      {s.rsi ? getRsiLabel(s.rsi) : ''}
+                                                    </p>
+                                                  </div>
+                                                  <div className="bg-accent/20 rounded-md p-2 text-center">
+                                                    <p className="text-[10px] text-muted-foreground">Market Cap</p>
+                                                    <p className="text-sm font-bold font-mono">
+                                                      {s.marketCap ? (s.marketCap > 1e12 ? `${(s.marketCap / 1e12).toFixed(1)}T` : s.marketCap > 1e9 ? `${(s.marketCap / 1e9).toFixed(1)}B` : `${(s.marketCap / 1e6).toFixed(0)}M`) : 'N/A'}
+                                                    </p>
+                                                  </div>
+                                                  <div className="bg-accent/20 rounded-md p-2 text-center">
+                                                    <p className="text-[10px] text-muted-foreground">Prev Close</p>
+                                                    <p className="text-sm font-bold font-mono">{s.prevClose ? `${cur}${s.prevClose.toFixed(2)}` : 'N/A'}</p>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            </div>
+
+                                            <div className="flex gap-2">
+                                              <Button size="sm" variant="outline" onClick={() => navigate(`/asset-analysis?symbol=${s.symbol}`)}>
+                                                <Activity className="h-3 w-3 mr-1" /> Full Analysis
+                                              </Button>
+                                              <Button size="sm" variant="outline" onClick={() => navigate(`/scanner?symbol=${s.symbol}`)}>
+                                                <Radar className="h-3 w-3 mr-1" /> Scan
+                                              </Button>
+                                              <Button size="sm" onClick={() => { setTradeSymbol(s); setTradeSide('BUY'); setTradeQty(''); }}>
+                                                <TrendingUp className="h-3 w-3 mr-1" /> Trade
+                                              </Button>
+                                            </div>
+                                          </>
+                                        )}
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                )}
+                              </>
                             );
                           })}
                         </TableBody>
@@ -607,9 +859,7 @@ const Watchlist = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Confirm Delete</AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteTarget?.type === 'watchlist'
-                ? `Delete watchlist "${deleteTarget.name}" and all its symbols?`
-                : `Remove ${deleteTarget?.name} from watchlist?`}
+              {deleteTarget?.type === 'watchlist' ? `Delete watchlist "${deleteTarget.name}" and all its symbols?` : `Remove ${deleteTarget?.name} from watchlist?`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
