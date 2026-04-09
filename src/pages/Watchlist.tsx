@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -37,6 +38,7 @@ interface SymbolWithPrice extends SymbolRow { price?: number; changePct?: number
 
 const Watchlist = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [watchlists, setWatchlists] = useState<WatchlistRow[]>([]);
   const [activeWl, setActiveWl] = useState<string>('');
   const [symbols, setSymbols] = useState<SymbolWithPrice[]>([]);
