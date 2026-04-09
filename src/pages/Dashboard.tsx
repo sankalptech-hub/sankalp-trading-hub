@@ -33,7 +33,7 @@ const Dashboard = () => {
 
   const toggleTradingMode = useCallback(async (toPaper: boolean) => {
     if (!user) return;
-    const { data: brokers } = await supabase.from('brokers').select('id, broker_name, display_name, is_default').eq('user_id', user.id);
+    const { data: brokers } = await supabase.from('brokers').select('id, broker_name, display_name, is_default, status').eq('user_id', user.id);
     if (!brokers?.length) return;
 
     const demoBroker = brokers.find(b => b.broker_name === 'demo');
