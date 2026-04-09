@@ -482,9 +482,12 @@ const Watchlist = () => {
                                     <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Trade" onClick={() => { setTradeSymbol(s); setTradeSide('BUY'); setTradeQty(''); }}>
                                       <TrendingUp className="h-3 w-3" />
                                     </Button>
-                                    <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Scan" onClick={() => window.location.href = `/scanner?symbol=${s.symbol}`}>
-                                      <Radar className="h-3 w-3" />
-                                    </Button>
+                                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Scan" onClick={() => navigate(`/scanner?symbol=${s.symbol}`)}>
+                                        <Radar className="h-3 w-3" />
+                                      </Button>
+                                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Analyze" onClick={() => navigate(`/asset-analysis?symbol=${s.symbol}`)}>
+                                        📊
+                                      </Button>
                                     <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Copy" onClick={() => { navigator.clipboard.writeText(s.symbol); toast.success('Copied'); }}>
                                       <Copy className="h-3 w-3" />
                                     </Button>
