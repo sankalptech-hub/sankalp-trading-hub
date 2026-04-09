@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { TrendingUp, ShoppingCart, Radio, Bell } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { TrendingUp, ShoppingCart, Radio, Bell, FlaskConical } from 'lucide-react';
 import { toast } from 'sonner';
 import { fetchPrice, PriceData, DASHBOARD_WATCHLIST, getCurrencySymbol } from '@/lib/marketData';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
