@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
-import { Plug, Eye, EyeOff, AlertTriangle, Clock } from 'lucide-react';
+import { Plug, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 
 interface BrokerTemplate {
   broker_name: string;
@@ -19,7 +19,6 @@ interface BrokerTemplate {
   markets: string;
   fields: string[];
   note: string;
-  
   isAlpaca?: boolean;
   isOanda?: boolean;
   extras?: string[];
@@ -49,7 +48,6 @@ const statusColors: Record<string, string> = { connected: 'bg-emerald-500/20 tex
 
 const REGION_LABELS: Record<string, string> = { INDIA: '🇮🇳 India', GLOBAL: '🌍 Global', FOREX: '🌐 Forex', DEMO: '🧪 Paper / Demo' };
 
-
 const Brokers = () => {
   const { user } = useAuth();
   const [brokers, setBrokers] = useState<any[]>([]);
@@ -58,10 +56,9 @@ const Brokers = () => {
   const [fields, setFields] = useState<Record<string, string>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
-  const [paperTrading, setPaperTrading] = useState(false);
+  const [paperTrading, setPaperTrading] = useState(true);
   const [alpacaEnv, setAlpacaEnv] = useState<'paper' | 'live'>('paper');
   const [oandaEnv, setOandaEnv] = useState<'practice' | 'live'>('practice');
-  const [countdowns, setCountdowns] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -74,27 +71,6 @@ const Brokers = () => {
   }, [user]);
 
   useEffect(() => { load(); }, [load]);
-
-  // Groww countdown
-  useEffect(() => {
-    const growwBroker = brokers.find(b => b.broker_name === 'groww' && b.status === 'connected');
-    if (!growwBroker) return;
-    const tick = async () => {
-      const resetAt = growwBroker.credentials_reset_at ? new Date(growwBroker.credentials_reset_at) : getNext6AMIST();
-      const diff = resetAt.getTime() - Date.now();
-      if (diff <= 0) {
-        await supabase.from('brokers').update({ status: 'disconnected' } as any).eq('id', growwBroker.id);
-        await supabase.from('alerts').insert({ user_id: user!.id, type: 'warning', message: 'Groww API credentials reset at 6 AM IST. Reconnect to resume live trading.' });
-        toast.error('Groww credentials have expired. Please reconnect.');
-        load();
-        return;
-      }
-      setCountdowns(p => ({ ...p, [growwBroker.id]: formatCountdown(resetAt) }));
-    };
-    tick();
-    const interval = setInterval(tick, 60000);
-    return () => clearInterval(interval);
-  }, [brokers, user, load]);
 
   const getBrokerStatus = (name: string) => brokers.find(b => b.broker_name === name);
 
@@ -116,30 +92,6 @@ const Brokers = () => {
     setPaperTrading(true);
     setAlpacaEnv('paper');
     setOandaEnv('practice');
-  };
-
-  const saveGroww = async () => {
-    if (!user || !modalBroker) return;
-    const errors: Record<string, string> = {};
-    for (const f of GROWW_FIELDS) {
-      if (f.required && !fields[f.name]?.trim()) errors[f.name] = `${f.name} is required`;
-      if (f.validate && fields[f.name]) { const err = f.validate(fields[f.name]); if (err) errors[f.name] = err; }
-    }
-    if (Object.keys(errors).length > 0) { setFieldErrors(errors); return; }
-
-    const existing = getBrokerStatus('groww');
-    const resetAt = getNext6AMIST().toISOString();
-    const configJson = { 'API Key': fields['API Key'], 'API Secret': fields['API Secret'], 'Auth Token': fields['Auth Token (Optional)'] || '' };
-
-    if (existing) {
-      await supabase.from('brokers').update({ status: 'connected', config_json: configJson, static_ip: fields['Static IP Address'], credentials_reset_at: resetAt, region: 'INDIA', supported_markets: ['NSE', 'BSE'], currency: 'INR' } as any).eq('id', existing.id);
-    } else {
-      const { data } = await supabase.from('brokers').insert({ user_id: user.id, broker_name: 'groww', display_name: 'Groww', status: 'connected', config_json: configJson, static_ip: fields['Static IP Address'], credentials_reset_at: resetAt, region: 'INDIA', supported_markets: ['NSE', 'BSE'], currency: 'INR' } as any).select().single();
-      if (data) await supabase.from('broker_accounts').insert({ user_id: user.id, broker_id: data.id, account_id: 'GROWW-001', account_type: 'live', balance: 0, currency: 'INR' } as any);
-    }
-    toast.success('Connected to Groww');
-    setModalBroker(null);
-    load();
   };
 
   const saveAlpaca = async () => {
@@ -187,7 +139,6 @@ const Brokers = () => {
 
   const saveConnect = async () => {
     if (!user || !modalBroker) return;
-    if (modalBroker.broker_name === 'groww') return saveGroww();
     if (modalBroker.broker_name === 'alpaca') return saveAlpaca();
     if (modalBroker.broker_name === 'oanda') return saveOanda();
 
@@ -221,27 +172,6 @@ const Brokers = () => {
   const connectedCount = brokers.filter(b => b.status === 'connected').length;
   const defaultBroker = brokers.find(b => b.is_default);
   const demoBalance = brokers.find(b => b.broker_name === 'demo')?.config_json?.balance || 100000;
-
-  const renderGrowwModal = () => (
-    <div className="space-y-4">
-      <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded flex items-start gap-2 text-xs text-yellow-400">
-        <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
-        <span>Groww API Key and Secret reset every day at 6:00 AM IST. Auth Token is optional.</span>
-      </div>
-      {GROWW_FIELDS.map(f => (
-        <div key={f.name}>
-          <Label>{f.name}{f.required && ' *'}</Label>
-          <div className="relative">
-            <Input type={f.type === 'password' ? (showPasswords[f.name] ? 'text' : 'password') : 'text'} value={fields[f.name] || ''} onChange={e => { setFields(p => ({ ...p, [f.name]: e.target.value })); setFieldErrors(p => { const n = { ...p }; delete n[f.name]; return n; }); }} placeholder={f.placeholder || ''} className={fieldErrors[f.name] ? 'border-destructive' : ''} />
-            {f.type === 'password' && <button className="absolute right-3 top-2.5 text-muted-foreground" onClick={() => setShowPasswords(p => ({ ...p, [f.name]: !p[f.name] }))}>{showPasswords[f.name] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>}
-          </div>
-          {fieldErrors[f.name] && <p className="text-xs text-destructive mt-1">{fieldErrors[f.name]}</p>}
-          {f.helper && <p className="text-xs text-muted-foreground mt-1">{f.helper}</p>}
-        </div>
-      ))}
-      <div className="flex gap-3"><Button onClick={saveGroww}>Save & Connect</Button><Button variant="outline" onClick={() => setModalBroker(null)}>Cancel</Button></div>
-    </div>
-  );
 
   const renderAlpacaModal = () => (
     <div className="space-y-4">
@@ -347,8 +277,6 @@ const Brokers = () => {
                 const existing = getBrokerStatus(tmpl.broker_name);
                 const status = existing?.status || 'disconnected';
                 const isDemo = tmpl.broker_name === 'demo';
-                const isGroww = tmpl.broker_name === 'groww';
-                const growwConnected = isGroww && status === 'connected';
                 return (
                   <Card key={tmpl.broker_name} className="card-glow">
                     <CardContent className="pt-6 space-y-3">
@@ -367,13 +295,6 @@ const Brokers = () => {
                       </div>
                       {tmpl.badge && <Badge className={`text-[10px] ${tmpl.badgeColor}`}>{tmpl.badge}</Badge>}
                       {tmpl.note && <p className="text-xs text-muted-foreground">{tmpl.note}</p>}
-                      {growwConnected && (
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1 text-xs text-yellow-400"><Clock className="h-3 w-3" /><span>🕕 Resets at 6:00 AM IST</span></div>
-                          {countdowns[existing.id] && <p className="text-xs font-mono text-yellow-400">{countdowns[existing.id]}</p>}
-                          {existing?.static_ip && <p className="text-xs text-muted-foreground">IP: {maskIP(existing.static_ip, isAdmin)}</p>}
-                        </div>
-                      )}
                       <div className="flex gap-2 flex-wrap">
                         {!isDemo && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openConfig(tmpl)}>Configure</Button>}
                         {existing && <Button size="sm" variant={existing.is_default ? 'default' : 'outline'} className="h-7 text-xs" onClick={() => setDefault(existing.id)}>{existing.is_default ? '★ Default' : 'Set Default'}</Button>}
@@ -418,8 +339,7 @@ const Brokers = () => {
             <DialogTitle>Connect {modalBroker?.display_name}</DialogTitle>
             <DialogDescription>Enter your credentials to connect.</DialogDescription>
           </DialogHeader>
-          {modalBroker?.broker_name === 'groww' ? renderGrowwModal() :
-           modalBroker?.broker_name === 'alpaca' ? renderAlpacaModal() :
+          {modalBroker?.broker_name === 'alpaca' ? renderAlpacaModal() :
            modalBroker?.broker_name === 'oanda' ? renderOandaModal() :
            renderGenericModal()}
         </DialogContent>
