@@ -50,13 +50,14 @@ const Scanner = () => {
   const getSymbols = () => {
     if (watchlist === 'NSE_MAIN') return WATCHLIST_NSE_MAIN;
     if (watchlist === 'NSE_TECH') return WATCHLIST_NSE_TECH;
+    if (watchlist === 'US_TECH') return WATCHLIST_US_TECH;
+    if (watchlist === 'US_FINANCE') return WATCHLIST_US_FINANCE;
+    if (watchlist === 'CANADA_TSX') return WATCHLIST_CANADA_TSX;
+    if (watchlist === 'UK_LSE') return WATCHLIST_UK_LSE;
+    if (watchlist === 'GLOBAL_ETFS') return WATCHLIST_GLOBAL_ETFS;
     if (watchlist === 'CUSTOM') return customSymbols;
-    // User watchlist
     const wl = userWatchlists.find(w => w.id === watchlist);
-    if (wl) {
-      // Need to fetch symbols for this watchlist
-      return [];
-    }
+    if (wl) return [];
     return customSymbols;
   };
 
@@ -133,8 +134,13 @@ const Scanner = () => {
               <Select value={watchlist} onValueChange={setWatchlist}>
                 <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="NSE_MAIN">NSE Main</SelectItem>
-                  <SelectItem value="NSE_TECH">NSE Tech</SelectItem>
+                  <SelectItem value="NSE_MAIN">🇮🇳 NSE Main</SelectItem>
+                  <SelectItem value="NSE_TECH">🇮🇳 NSE Tech</SelectItem>
+                  <SelectItem value="US_TECH">🇺🇸 US Tech</SelectItem>
+                  <SelectItem value="US_FINANCE">🇺🇸 US Finance</SelectItem>
+                  <SelectItem value="CANADA_TSX">🇨🇦 TSX Canada</SelectItem>
+                  <SelectItem value="UK_LSE">🇬🇧 LSE London</SelectItem>
+                  <SelectItem value="GLOBAL_ETFS">🌍 Global ETFs</SelectItem>
                   <SelectItem value="CUSTOM">Custom</SelectItem>
                   {userWatchlists.map((wl: any) => <SelectItem key={wl.id} value={wl.id}>📌 {wl.name}</SelectItem>)}
                 </SelectContent>
@@ -190,7 +196,11 @@ const Scanner = () => {
                 <TableBody>
                   {results.map(r => (
                     <TableRow key={r.symbol}>
-                      <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
+                      <TableCell className="font-mono font-semibold">
+                        <span className="mr-1">{EXCHANGES[getExchangeForSymbol(r.symbol)]?.flag || '🌐'}</span>
+                        {r.symbol}
+                        <span className="text-[10px] text-muted-foreground ml-1">{getExchangeForSymbol(r.symbol)}</span>
+                      </TableCell>
                       <TableCell className="font-mono">{r.currency}{r.price.toFixed(2)}</TableCell>
                       <TableCell className={`font-mono ${r.changePct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.changePct >= 0 ? '+' : ''}{r.changePct.toFixed(2)}%</TableCell>
                       <TableCell className="font-mono text-xs">{(r.volume / 1000000).toFixed(1)}M</TableCell>
