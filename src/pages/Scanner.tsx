@@ -126,6 +126,7 @@ const Scanner = () => {
                   <SelectItem value="NSE_MAIN">NSE Main</SelectItem>
                   <SelectItem value="NSE_TECH">NSE Tech</SelectItem>
                   <SelectItem value="CUSTOM">Custom</SelectItem>
+                  {userWatchlists.map((wl: any) => <SelectItem key={wl.id} value={wl.id}>📌 {wl.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
