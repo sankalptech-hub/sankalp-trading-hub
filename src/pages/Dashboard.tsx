@@ -28,6 +28,55 @@ const Dashboard = () => {
   const [userWatchlists, setUserWatchlists] = useState<any[]>([]);
   const [selectedWl, setSelectedWl] = useState<string>('default');
   const [activeSymbols, setActiveSymbols] = useState<string[]>(DASHBOARD_WATCHLIST);
+  const [paperMode, setPaperMode] = useState(true);
+  const [defaultBrokerName, setDefaultBrokerName] = useState('Demo');
+
+  const toggleTradingMode = useCallback(async (toPaper: boolean) => {
+    if (!user) return;
+    const { data: brokers } = await supabase.from('brokers').select('id, broker_name, display_name, is_default').eq('user_id', user.id);
+    if (!brokers?.length) return;
+
+    const demoBroker = brokers.find(b => b.broker_name === 'demo');
+    const liveBroker = brokers.find(b => b.broker_name !== 'demo' && b.is_default) || brokers.find(b => b.broker_name !== 'demo');
+
+    if (toPaper) {
+      // Set demo as default
+      if (demoBroker) {
+        for (const b of brokers) {
+          if (b.is_default) await supabase.from('brokers').update({ is_default: false } as any).eq('id', b.id);
+        }
+        await supabase.from('brokers').update({ is_default: true } as any).eq('id', demoBroker.id);
+        setDefaultBrokerName('Demo / Paper');
+        toast.success('Switched to Paper Trading mode');
+      }
+    } else {
+      // Set first live broker as default
+      if (liveBroker) {
+        for (const b of brokers) {
+          if (b.is_default) await supabase.from('brokers').update({ is_default: false } as any).eq('id', b.id);
+        }
+        await supabase.from('brokers').update({ is_default: true } as any).eq('id', liveBroker.id);
+        setDefaultBrokerName(liveBroker.display_name);
+        toast.success(`Switched to Live Trading via ${liveBroker.display_name}`);
+      } else {
+        toast.error('No live broker connected. Configure one in Brokers page.');
+        setPaperMode(true);
+        return;
+      }
+    }
+    setPaperMode(toPaper);
+  }, [user]);
+
+  // Load current default broker on mount
+  useEffect(() => {
+    if (!user) return;
+    supabase.from('brokers').select('broker_name, display_name').eq('user_id', user.id).eq('is_default', true).maybeSingle().then(({ data }) => {
+      if (data) {
+        setPaperMode(data.broker_name === 'demo');
+        setDefaultBrokerName(data.broker_name === 'demo' ? 'Demo / Paper' : data.display_name);
+      }
+    });
+  }, [user]);
 
   const fetchAll = async () => {
     if (!user) return;
