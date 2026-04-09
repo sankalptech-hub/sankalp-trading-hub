@@ -37,7 +37,8 @@ const Dashboard = () => {
     if (!brokers?.length) return;
 
     const demoBroker = brokers.find(b => b.broker_name === 'demo');
-    const liveBroker = brokers.find(b => b.broker_name !== 'demo' && b.is_default) || brokers.find(b => b.broker_name !== 'demo');
+    const connectedLive = brokers.filter(b => b.broker_name !== 'demo' && b.status === 'connected');
+    const liveBroker = connectedLive.find(b => b.is_default) || connectedLive[0];
 
     if (toPaper) {
       // Set demo as default
