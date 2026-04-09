@@ -49,36 +49,9 @@ const statusColors: Record<string, string> = { connected: 'bg-emerald-500/20 tex
 
 const REGION_LABELS: Record<string, string> = { INDIA: '🇮🇳 India', GLOBAL: '🌍 Global', FOREX: '🌐 Forex', DEMO: '🧪 Paper / Demo' };
 
-function getNext6AMIST(): Date {
-  const now = new Date();
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istNow = new Date(now.getTime() + istOffset);
-  const istToday6AM = new Date(istNow);
-  istToday6AM.setUTCHours(6, 0, 0, 0);
-  if (istNow.getUTCHours() > 6 || (istNow.getUTCHours() === 6 && istNow.getUTCMinutes() > 0)) {
-    istToday6AM.setUTCDate(istToday6AM.getUTCDate() + 1);
-  }
-  return new Date(istToday6AM.getTime() - istOffset);
-}
-
-function formatCountdown(targetUTC: Date): string {
-  const diff = targetUTC.getTime() - Date.now();
-  if (diff <= 0) return 'Expired';
-  const h = Math.floor(diff / 3600000);
-  const m = Math.floor((diff % 3600000) / 60000);
-  return `Resets in ${h}h ${m}m`;
-}
-
-function maskIP(ip: string, isAdmin: boolean): string {
-  if (!ip) return '';
-  if (isAdmin) return ip;
-  const parts = ip.split('.');
-  if (parts.length !== 4) return ip;
-  return `***.***.***.${parts[3]}`;
-}
 
 const Brokers = () => {
-  const { user, isAdmin } = useAuth();
+  const { user } = useAuth();
   const [brokers, setBrokers] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [modalBroker, setModalBroker] = useState<BrokerTemplate | null>(null);
