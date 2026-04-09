@@ -46,14 +46,8 @@ const Dashboard = () => {
     }
   };
 
-  const fetchWatchlistData = async () => {
-    for (const sym of DASHBOARD_WATCHLIST) {
-      try {
-        const data = await fetchPrice(sym);
-        setWatchlist(prev => ({ ...prev, [sym]: { ...data, symbol: sym } }));
-      } catch { /* skip */ }
-    }
-  };
+
+
 
   // Fetch user watchlists
   useEffect(() => {
