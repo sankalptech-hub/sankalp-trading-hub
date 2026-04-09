@@ -437,6 +437,77 @@ export type Database = {
         }
         Relationships: []
       }
+      watchlist_symbols: {
+        Row: {
+          added_at: string
+          display_name: string | null
+          id: string
+          notes: string | null
+          symbol: string
+          user_id: string
+          watchlist_id: string
+        }
+        Insert: {
+          added_at?: string
+          display_name?: string | null
+          id?: string
+          notes?: string | null
+          symbol: string
+          user_id: string
+          watchlist_id: string
+        }
+        Update: {
+          added_at?: string
+          display_name?: string | null
+          id?: string
+          notes?: string | null
+          symbol?: string
+          user_id?: string
+          watchlist_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "watchlist_symbols_watchlist_id_fkey"
+            columns: ["watchlist_id"]
+            isOneToOne: false
+            referencedRelation: "watchlists"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      watchlists: {
+        Row: {
+          color: string
+          created_at: string
+          description: string | null
+          id: string
+          is_default: boolean
+          name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          color?: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_default?: boolean
+          name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          color?: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_default?: boolean
+          name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

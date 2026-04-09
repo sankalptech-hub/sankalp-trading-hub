@@ -7,6 +7,8 @@ import { Badge } from '@/components/ui/badge';
 import { TrendingUp, ShoppingCart, Radio, Bell } from 'lucide-react';
 import { toast } from 'sonner';
 import { fetchPrice, PriceData, DASHBOARD_WATCHLIST, getCurrencySymbol } from '@/lib/marketData';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useNavigate } from 'react-router-dom';
 
 const statusColor: Record<string, string> = {
   pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
@@ -16,11 +18,15 @@ const statusColor: Record<string, string> = {
 
 const Dashboard = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [positions, setPositions] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
   const [signals, setSignals] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [watchlist, setWatchlist] = useState<Record<string, PriceData & { symbol: string }>>({});
+  const [userWatchlists, setUserWatchlists] = useState<any[]>([]);
+  const [selectedWl, setSelectedWl] = useState<string>('default');
+  const [activeSymbols, setActiveSymbols] = useState<string[]>(DASHBOARD_WATCHLIST);
 
   const fetchAll = async () => {
     if (!user) return;
@@ -40,8 +46,30 @@ const Dashboard = () => {
     }
   };
 
-  const fetchWatchlistData = async () => {
-    for (const sym of DASHBOARD_WATCHLIST) {
+
+
+
+  // Fetch user watchlists
+  useEffect(() => {
+    if (!user) return;
+    supabase.from('watchlists').select('*').eq('user_id', user.id).order('created_at').then(({ data }) => {
+      setUserWatchlists(data || []);
+    });
+  }, [user]);
+
+  // When selected watchlist changes, load its symbols
+  useEffect(() => {
+    if (selectedWl === 'default' || !user) {
+      setActiveSymbols(DASHBOARD_WATCHLIST);
+      return;
+    }
+    supabase.from('watchlist_symbols').select('symbol').eq('watchlist_id', selectedWl).eq('user_id', user.id).then(({ data }) => {
+      setActiveSymbols(data?.map((d: any) => d.symbol) || DASHBOARD_WATCHLIST);
+    });
+  }, [selectedWl, user]);
+
+  const fetchWatchlistDataForSymbols = async () => {
+    for (const sym of activeSymbols) {
       try {
         const data = await fetchPrice(sym);
         setWatchlist(prev => ({ ...prev, [sym]: { ...data, symbol: sym } }));
@@ -51,11 +79,11 @@ const Dashboard = () => {
 
   useEffect(() => {
     fetchAll();
-    fetchWatchlistData();
+    fetchWatchlistDataForSymbols();
     const interval = setInterval(fetchAll, 10000);
-    const watchInterval = setInterval(fetchWatchlistData, 30000);
+    const watchInterval = setInterval(fetchWatchlistDataForSymbols, 30000);
     return () => { clearInterval(interval); clearInterval(watchInterval); };
-  }, [user]);
+  }, [user, activeSymbols]);
 
   const stats = [
     { label: 'Open Positions', value: positions.length, icon: TrendingUp, color: 'text-primary' },
@@ -85,13 +113,27 @@ const Dashboard = () => {
 
       {Object.keys(watchlist).length > 0 && (
         <Card className="card-glow">
-          <CardHeader><CardTitle className="text-lg">Market Watchlist</CardTitle></CardHeader>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-lg">Market Watchlist</CardTitle>
+              <div className="flex items-center gap-2">
+                <Select value={selectedWl} onValueChange={setSelectedWl}>
+                  <SelectTrigger className="w-40 h-8 text-xs"><SelectValue placeholder="Default" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Default (NSE)</SelectItem>
+                    {userWatchlists.map((wl: any) => <SelectItem key={wl.id} value={wl.id}>{wl.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <button className="text-xs text-primary hover:underline" onClick={() => navigate('/watchlist')}>Manage</button>
+              </div>
+            </div>
+          </CardHeader>
           <CardContent>
             <div className="table-striped">
               <Table>
                 <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change %</TableHead><TableHead>Volume</TableHead><TableHead></TableHead></TableRow></TableHeader>
                 <TableBody>
-                  {DASHBOARD_WATCHLIST.map(sym => {
+                  {activeSymbols.map(sym => {
                     const w = watchlist[sym];
                     if (!w) return null;
                     const cur = getCurrencySymbol(sym);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -7,8 +7,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Loader2, Radar } from 'lucide-react';
+import { Loader2, Radar, Bookmark } from 'lucide-react';
 import { fetchPrice, getCurrencySymbol, WATCHLIST_NSE_MAIN, WATCHLIST_NSE_TECH } from '@/lib/marketData';
 
 interface ScanResult {
@@ -34,15 +35,41 @@ const Scanner = () => {
     try { return JSON.parse(localStorage.getItem('scanner_custom_symbols') || '[]') as string[]; } catch { return []; }
   });
   const [newSymbol, setNewSymbol] = useState('');
+  const [userWatchlists, setUserWatchlists] = useState<any[]>([]);
+  const [showSaveWl, setShowSaveWl] = useState(false);
+  const [saveWlName, setSaveWlName] = useState('');
+
+  useEffect(() => {
+    if (!user) return;
+    supabase.from('watchlists').select('*').eq('user_id', user.id).order('created_at').then(({ data }) => {
+      setUserWatchlists(data || []);
+    });
+  }, [user]);
 
   const getSymbols = () => {
     if (watchlist === 'NSE_MAIN') return WATCHLIST_NSE_MAIN;
     if (watchlist === 'NSE_TECH') return WATCHLIST_NSE_TECH;
+    if (watchlist === 'CUSTOM') return customSymbols;
+    // User watchlist
+    const wl = userWatchlists.find(w => w.id === watchlist);
+    if (wl) {
+      // Need to fetch symbols for this watchlist
+      return [];
+    }
     return customSymbols;
   };
 
+  const scanUserWatchlist = async (wlId: string) => {
+    const { data } = await supabase.from('watchlist_symbols').select('symbol').eq('watchlist_id', wlId).eq('user_id', user!.id);
+    return data?.map((d: any) => d.symbol) || [];
+  };
+
   const scan = async () => {
-    const symbols = getSymbols();
+    let symbols = getSymbols();
+    // If user watchlist selected, fetch symbols first
+    if (watchlist !== 'NSE_MAIN' && watchlist !== 'NSE_TECH' && watchlist !== 'CUSTOM') {
+      symbols = await scanUserWatchlist(watchlist);
+    }
     if (symbols.length === 0) { toast.error('No symbols to scan'); return; }
     setScanning(true);
     const start = Date.now();
@@ -83,6 +110,15 @@ const Scanner = () => {
     localStorage.setItem('scanner_custom_symbols', JSON.stringify(updated));
   };
 
+  const saveAsWatchlist = async () => {
+    if (!saveWlName.trim() || !user || results.length === 0) return;
+    const { data: wl } = await supabase.from('watchlists').insert({ user_id: user.id, name: saveWlName.trim(), color: '#f59e0b', is_default: false } as any).select().single();
+    if (!wl) { toast.error('Failed to create watchlist'); return; }
+    await supabase.from('watchlist_symbols').insert(results.map(r => ({ watchlist_id: wl.id, user_id: user.id, symbol: r.symbol })) as any);
+    toast.success(`Watchlist "${saveWlName}" created with ${results.length} symbols`);
+    setShowSaveWl(false); setSaveWlName('');
+  };
+
   const signalColor: Record<string, string> = { BUY: 'bg-emerald-500/20 text-emerald-400', SELL: 'bg-red-500/20 text-red-400', HOLD: 'bg-yellow-500/20 text-yellow-400' };
 
   return (
@@ -99,6 +135,7 @@ const Scanner = () => {
                   <SelectItem value="NSE_MAIN">NSE Main</SelectItem>
                   <SelectItem value="NSE_TECH">NSE Tech</SelectItem>
                   <SelectItem value="CUSTOM">Custom</SelectItem>
+                  {userWatchlists.map((wl: any) => <SelectItem key={wl.id} value={wl.id}>📌 {wl.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -173,6 +210,25 @@ const Scanner = () => {
           </CardContent>
         </Card>
       )}
+
+      {results.length > 0 && (
+        <Button variant="outline" onClick={() => setShowSaveWl(true)}>
+          <Bookmark className="h-4 w-4 mr-2" /> Save scan results as new watchlist
+        </Button>
+      )}
+
+      <Dialog open={showSaveWl} onOpenChange={setShowSaveWl}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Save as Watchlist</DialogTitle>
+            <DialogDescription>Create a new watchlist from {results.length} scanned symbols</DialogDescription>
+          </DialogHeader>
+          <Input placeholder="Watchlist name" value={saveWlName} onChange={e => setSaveWlName(e.target.value)} />
+          <DialogFooter>
+            <Button onClick={saveAsWatchlist} disabled={!saveWlName.trim()}>Create Watchlist</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, TrendingUp, Radar, Wrench, BarChart3, Layers, Clock,
+  LayoutDashboard, TrendingUp, Radar, Bookmark, Wrench, BarChart3, Layers, Clock,
   PieChart, Shield, Plug, Bell, Bot, ListChecks, Settings, LogOut,
   ShieldCheck, Sun, Moon,
 } from 'lucide-react';
@@ -18,6 +18,7 @@ const mainItems = [
   { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard },
   { title: 'Trade', url: '/trade', icon: TrendingUp },
   { title: 'Scanner', url: '/scanner', icon: Radar },
+  { title: 'Watchlist', url: '/watchlist', icon: Bookmark },
 ];
 
 const strategyItems = [
