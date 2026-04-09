@@ -4,6 +4,7 @@ import {
   ShieldCheck, Sun, Moon, Activity,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
+import { MarketStatusHeader } from '@/components/MarketStatusHeader';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -77,6 +78,7 @@ export function AppSidebar() {
               </span>
             )}
           </SidebarGroupLabel>
+          {!collapsed && <MarketStatusHeader />}
         </SidebarGroup>
 
         {groups.map(g => (
