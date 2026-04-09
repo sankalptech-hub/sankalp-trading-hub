@@ -42,7 +42,7 @@ const SEED_TASKS = [
   { task_name: 'Light Dark theme toggle', module: 'UI', status: 'Completed', priority: 'Low' },
   { task_name: 'Settings page', module: 'UI', status: 'Completed', priority: 'Medium' },
   { task_name: 'Zerodha live API execution', module: 'Backend', status: 'In Progress', priority: 'High' },
-  { task_name: 'Groww API integration', module: 'Backend', status: 'In Progress', priority: 'High' },
+  { task_name: 'Alpaca broker integration', module: 'Backend', status: 'Completed', priority: 'High' },
   { task_name: 'IBKR TWS bridge', module: 'Backend', status: 'In Progress', priority: 'High' },
   { task_name: 'MT4 MT5 bridge', module: 'Backend', status: 'In Progress', priority: 'Medium' },
   { task_name: 'Automation workflows', module: 'Backend', status: 'Not Started', priority: 'Low' },

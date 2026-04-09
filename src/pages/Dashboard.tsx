@@ -33,11 +33,12 @@ const Dashboard = () => {
 
   const toggleTradingMode = useCallback(async (toPaper: boolean) => {
     if (!user) return;
-    const { data: brokers } = await supabase.from('brokers').select('id, broker_name, display_name, is_default').eq('user_id', user.id);
+    const { data: brokers } = await supabase.from('brokers').select('id, broker_name, display_name, is_default, status').eq('user_id', user.id);
     if (!brokers?.length) return;
 
     const demoBroker = brokers.find(b => b.broker_name === 'demo');
-    const liveBroker = brokers.find(b => b.broker_name !== 'demo' && b.is_default) || brokers.find(b => b.broker_name !== 'demo');
+    const connectedLive = brokers.filter(b => b.broker_name !== 'demo' && b.status === 'connected');
+    const liveBroker = connectedLive.find(b => b.is_default) || connectedLive[0];
 
     if (toPaper) {
       // Set demo as default
