@@ -46,6 +46,7 @@ const SEED_TASKS = [
   { task_name: 'IBKR TWS bridge', module: 'Backend', status: 'In Progress', priority: 'High' },
   { task_name: 'MT4 MT5 bridge', module: 'Backend', status: 'In Progress', priority: 'Medium' },
   { task_name: 'Automation workflows', module: 'Backend', status: 'Not Started', priority: 'Low' },
+  { task_name: 'Watchlist management page', module: 'UI', status: 'Completed', priority: 'High' },
 ];
 
 const statusColors: Record<string, string> = {
