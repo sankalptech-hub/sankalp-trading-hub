@@ -22,6 +22,7 @@ import AIAssistant from "./pages/AIAssistant";
 import BuildTracker from "./pages/BuildTracker";
 import Settings from "./pages/Settings";
 import AdminPanel from "./pages/AdminPanel";
+import AssetAnalysis from "./pages/AssetAnalysis";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -46,6 +47,7 @@ const App = () => (
                 <Route path="/strategies" element={<Strategies />} />
                 <Route path="/history" element={<History />} />
                 <Route path="/analytics" element={<Analytics />} />
+                <Route path="/asset-analysis" element={<AssetAnalysis />} />
                 <Route path="/risk" element={<Risk />} />
                 <Route path="/brokers" element={<Brokers />} />
                 <Route path="/alerts" element={<Alerts />} />

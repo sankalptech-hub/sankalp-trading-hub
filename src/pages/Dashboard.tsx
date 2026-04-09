@@ -131,7 +131,7 @@ const Dashboard = () => {
           <CardContent>
             <div className="table-striped">
               <Table>
-                <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change %</TableHead><TableHead>Volume</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change %</TableHead><TableHead>Volume</TableHead><TableHead></TableHead><TableHead></TableHead></TableRow></TableHeader>
                 <TableBody>
                   {activeSymbols.map(sym => {
                     const w = watchlist[sym];
@@ -146,6 +146,7 @@ const Dashboard = () => {
                         </TableCell>
                         <TableCell className="font-mono text-xs">{w.volume ? `${(w.volume / 1000000).toFixed(1)}M` : '-'}</TableCell>
                         <TableCell>{w.cached && <span className="text-xs text-muted-foreground">(cached)</span>}</TableCell>
+                        <TableCell><button className="text-xs text-primary hover:underline" onClick={() => navigate(`/asset-analysis?symbol=${sym}`)}>📊</button></TableCell>
                       </TableRow>
                     );
                   })}

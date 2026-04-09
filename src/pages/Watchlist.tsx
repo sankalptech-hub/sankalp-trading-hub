@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -37,6 +38,7 @@ interface SymbolWithPrice extends SymbolRow { price?: number; changePct?: number
 
 const Watchlist = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [watchlists, setWatchlists] = useState<WatchlistRow[]>([]);
   const [activeWl, setActiveWl] = useState<string>('');
   const [symbols, setSymbols] = useState<SymbolWithPrice[]>([]);
@@ -480,9 +482,12 @@ const Watchlist = () => {
                                     <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Trade" onClick={() => { setTradeSymbol(s); setTradeSide('BUY'); setTradeQty(''); }}>
                                       <TrendingUp className="h-3 w-3" />
                                     </Button>
-                                    <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Scan" onClick={() => window.location.href = `/scanner?symbol=${s.symbol}`}>
-                                      <Radar className="h-3 w-3" />
-                                    </Button>
+                                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Scan" onClick={() => navigate(`/scanner?symbol=${s.symbol}`)}>
+                                        <Radar className="h-3 w-3" />
+                                      </Button>
+                                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Analyze" onClick={() => navigate(`/asset-analysis?symbol=${s.symbol}`)}>
+                                        📊
+                                      </Button>
                                     <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Copy" onClick={() => { navigator.clipboard.writeText(s.symbol); toast.success('Copied'); }}>
                                       <Copy className="h-3 w-3" />
                                     </Button>
