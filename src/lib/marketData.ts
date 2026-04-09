@@ -51,7 +51,14 @@ export interface PriceData {
 }
 
 export function getCurrencySymbol(symbol: string): string {
-  return symbol.toUpperCase().endsWith('.NS') ? '₹' : '$';
+  const upper = symbol.toUpperCase();
+  if (upper.endsWith('.NS') || upper.endsWith('.BO')) return '₹';
+  if (upper.endsWith('.L')) return '£';
+  if (upper.endsWith('.DE')) return '€';
+  if (upper.endsWith('.AX')) return 'A$';
+  if (upper.endsWith('.HK')) return 'HK$';
+  if (upper.endsWith('.SI')) return 'S$';
+  return '$';
 }
 
 export async function fetchPrice(symbol: string): Promise<PriceData> {
@@ -326,10 +333,24 @@ export const NSE_SYMBOLS = [
   'BAJFINANCE.NS', 'HCLTECH.NS', 'TECHM.NS',
 ];
 
-export const US_SYMBOLS = ['AAPL', 'MSFT', 'TSLA', 'GOOGL', 'AMZN'];
+export const US_SYMBOLS = ['AAPL', 'MSFT', 'TSLA', 'GOOGL', 'AMZN', 'NVDA', 'META'];
 
-export const ALL_SYMBOLS = [...NSE_SYMBOLS, ...US_SYMBOLS];
+export const GLOBAL_SYMBOLS = [
+  ...NSE_SYMBOLS, ...US_SYMBOLS,
+  'SHOP.TO', 'RY.TO', 'TD.TO',
+  'VOD.L', 'BP.L', 'AZN.L',
+  'BHP.AX', 'CBA.AX',
+];
+
+export const ALL_SYMBOLS = GLOBAL_SYMBOLS;
 
 export const WATCHLIST_NSE_MAIN = ['RELIANCE.NS', 'TCS.NS', 'INFY.NS', 'WIPRO.NS', 'HDFCBANK.NS', 'ICICIBANK.NS', 'SBIN.NS', 'BAJFINANCE.NS'];
 export const WATCHLIST_NSE_TECH = ['INFY.NS', 'TCS.NS', 'WIPRO.NS', 'TECHM.NS', 'HCLTECH.NS'];
+export const WATCHLIST_US_TECH = ['AAPL', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'TSLA'];
+export const WATCHLIST_US_FINANCE = ['JPM', 'BAC', 'GS', 'V', 'MA'];
+export const WATCHLIST_CANADA_TSX = ['SHOP.TO', 'RY.TO', 'TD.TO'];
+export const WATCHLIST_UK_LSE = ['VOD.L', 'BP.L', 'AZN.L'];
+export const WATCHLIST_GLOBAL_ETFS = ['SPY', 'QQQ'];
 export const DASHBOARD_WATCHLIST = ['RELIANCE.NS', 'TCS.NS', 'INFY.NS', 'WIPRO.NS', 'HDFCBANK.NS'];
+
+export const FOREX_PAIRS = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CAD', 'AUD/USD', 'USD/INR'];
