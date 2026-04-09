@@ -19,7 +19,7 @@ interface BrokerTemplate {
   markets: string;
   fields: string[];
   note: string;
-  isGroww?: boolean;
+  
   isAlpaca?: boolean;
   isOanda?: boolean;
   extras?: string[];
