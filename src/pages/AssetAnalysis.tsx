@@ -12,10 +12,6 @@ import { Loader2, TrendingUp, Activity, BarChart3 } from 'lucide-react';
 import { fetchCandleData, fetchPrice, getCurrencySymbol, CandleData, PriceData, NSE_SYMBOLS, US_SYMBOLS } from '@/lib/marketData';
 import CandlestickChart from '@/components/CandlestickChart';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area, ComposedChart, Bar, Cell } from 'recharts';
-import { Loader2, CandlestickChart as CandleIcon, TrendingUp, TrendingDown, Activity, BarChart3 } from 'lucide-react';
-import { fetchCandleData, fetchPrice, getCurrencySymbol, CandleData, PriceData, ALL_SYMBOLS, NSE_SYMBOLS, US_SYMBOLS } from '@/lib/marketData';
-import CandlestickChart from '@/components/CandlestickChart';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 const RANGES = [
   { label: '1D', value: '1d', interval: '5m' },
@@ -390,7 +386,6 @@ const AssetAnalysis = () => {
 };
 
 // MACD chart subcomponent
-import { ComposedChart, Bar, Cell } from 'recharts';
 
 const ComposedChartMACD = ({ data }: { data: any[] }) => (
   <ComposedChart data={data}>
