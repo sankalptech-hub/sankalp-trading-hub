@@ -13,31 +13,6 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
 import { Plug, Eye, EyeOff, AlertTriangle, Clock } from 'lucide-react';
 
-interface BrokerField {
-  name: string;
-  required: boolean;
-  type: 'password' | 'text';
-  helper?: string;
-  placeholder?: string;
-  validate?: (v: string) => string | null;
-}
-
-const IP_REGEX = /^(\d{1,3}\.){3}\d{1,3}$/;
-const validateIP = (v: string): string | null => {
-  if (!v) return 'Static IP is required';
-  if (!IP_REGEX.test(v)) return 'Please enter a valid IP address';
-  const parts = v.split('.').map(Number);
-  if (parts.some(p => p > 255)) return 'Please enter a valid IP address';
-  return null;
-};
-
-const GROWW_FIELDS: BrokerField[] = [
-  { name: 'API Key', required: true, type: 'password', helper: 'Resets daily at 6:00 AM IST. Re-enter each day before trading.' },
-  { name: 'API Secret', required: true, type: 'password', helper: 'Resets daily at 6:00 AM IST. Re-enter each day before trading.' },
-  { name: 'Auth Token (Optional)', required: false, type: 'password', helper: 'Only required if Groww requests session-based authentication.' },
-  { name: 'Static IP Address', required: true, type: 'text', placeholder: 'e.g. 103.21.58.120', helper: 'Whitelist this IP in your Groww API dashboard.', validate: validateIP },
-];
-
 interface BrokerTemplate {
   broker_name: string;
   display_name: string;
