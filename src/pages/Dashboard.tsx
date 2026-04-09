@@ -144,7 +144,21 @@ const Dashboard = () => {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <div className="flex items-center gap-3 bg-card border rounded-lg px-4 py-2">
+          <FlaskConical className={`h-4 w-4 ${paperMode ? 'text-primary' : 'text-muted-foreground'}`} />
+          <span className={`text-sm font-medium ${paperMode ? 'text-primary' : 'text-muted-foreground'}`}>Paper</span>
+          <Switch
+            checked={!paperMode}
+            onCheckedChange={(checked) => toggleTradingMode(!checked)}
+          />
+          <span className={`text-sm font-medium ${!paperMode ? 'text-emerald-400' : 'text-muted-foreground'}`}>Live</span>
+          <Badge variant="outline" className={`text-[10px] ml-1 ${paperMode ? 'border-primary/30 text-primary' : 'border-emerald-500/30 text-emerald-400'}`}>
+            {defaultBrokerName}
+          </Badge>
+        </div>
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map(s => (
           <Card key={s.label} className="card-glow">
