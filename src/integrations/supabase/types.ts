@@ -141,11 +141,14 @@ export type Database = {
           config_json: Json | null
           created_at: string
           credentials_reset_at: string | null
+          currency: string
           display_name: string
           id: string
           is_default: boolean
+          region: string
           static_ip: string | null
           status: string
+          supported_markets: string[]
           updated_at: string
           user_id: string
         }
@@ -154,11 +157,14 @@ export type Database = {
           config_json?: Json | null
           created_at?: string
           credentials_reset_at?: string | null
+          currency?: string
           display_name: string
           id?: string
           is_default?: boolean
+          region?: string
           static_ip?: string | null
           status?: string
+          supported_markets?: string[]
           updated_at?: string
           user_id: string
         }
@@ -167,11 +173,14 @@ export type Database = {
           config_json?: Json | null
           created_at?: string
           credentials_reset_at?: string | null
+          currency?: string
           display_name?: string
           id?: string
           is_default?: boolean
+          region?: string
           static_ip?: string | null
           status?: string
+          supported_markets?: string[]
           updated_at?: string
           user_id?: string
         }
@@ -284,6 +293,10 @@ export type Database = {
       positions: {
         Row: {
           avg_price: number
+          base_currency_value: number
+          currency: string
+          exchange: string | null
+          exchange_rate_to_inr: number
           id: string
           qty: number
           symbol: string
@@ -292,6 +305,10 @@ export type Database = {
         }
         Insert: {
           avg_price?: number
+          base_currency_value?: number
+          currency?: string
+          exchange?: string | null
+          exchange_rate_to_inr?: number
           id?: string
           qty?: number
           symbol: string
@@ -300,6 +317,10 @@ export type Database = {
         }
         Update: {
           avg_price?: number
+          base_currency_value?: number
+          currency?: string
+          exchange?: string | null
+          exchange_rate_to_inr?: number
           id?: string
           qty?: number
           symbol?: string
@@ -314,6 +335,9 @@ export type Database = {
           created_at: string
           display_name: string | null
           id: string
+          preferred_currency: string
+          preferred_exchange: string
+          region: string
           updated_at: string
           user_id: string
         }
@@ -322,6 +346,9 @@ export type Database = {
           created_at?: string
           display_name?: string | null
           id?: string
+          preferred_currency?: string
+          preferred_exchange?: string
+          region?: string
           updated_at?: string
           user_id: string
         }
@@ -330,6 +357,9 @@ export type Database = {
           created_at?: string
           display_name?: string | null
           id?: string
+          preferred_currency?: string
+          preferred_exchange?: string
+          region?: string
           updated_at?: string
           user_id?: string
         }
