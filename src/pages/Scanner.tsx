@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -7,8 +7,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Loader2, Radar } from 'lucide-react';
+import { Loader2, Radar, Bookmark } from 'lucide-react';
 import { fetchPrice, getCurrencySymbol, WATCHLIST_NSE_MAIN, WATCHLIST_NSE_TECH } from '@/lib/marketData';
 
 interface ScanResult {
@@ -34,15 +35,41 @@ const Scanner = () => {
     try { return JSON.parse(localStorage.getItem('scanner_custom_symbols') || '[]') as string[]; } catch { return []; }
   });
   const [newSymbol, setNewSymbol] = useState('');
+  const [userWatchlists, setUserWatchlists] = useState<any[]>([]);
+  const [showSaveWl, setShowSaveWl] = useState(false);
+  const [saveWlName, setSaveWlName] = useState('');
+
+  useEffect(() => {
+    if (!user) return;
+    supabase.from('watchlists').select('*').eq('user_id', user.id).order('created_at').then(({ data }) => {
+      setUserWatchlists(data || []);
+    });
+  }, [user]);
 
   const getSymbols = () => {
     if (watchlist === 'NSE_MAIN') return WATCHLIST_NSE_MAIN;
     if (watchlist === 'NSE_TECH') return WATCHLIST_NSE_TECH;
+    if (watchlist === 'CUSTOM') return customSymbols;
+    // User watchlist
+    const wl = userWatchlists.find(w => w.id === watchlist);
+    if (wl) {
+      // Need to fetch symbols for this watchlist
+      return [];
+    }
     return customSymbols;
   };
 
+  const scanUserWatchlist = async (wlId: string) => {
+    const { data } = await supabase.from('watchlist_symbols').select('symbol').eq('watchlist_id', wlId).eq('user_id', user!.id);
+    return data?.map((d: any) => d.symbol) || [];
+  };
+
   const scan = async () => {
-    const symbols = getSymbols();
+    let symbols = getSymbols();
+    // If user watchlist selected, fetch symbols first
+    if (watchlist !== 'NSE_MAIN' && watchlist !== 'NSE_TECH' && watchlist !== 'CUSTOM') {
+      symbols = await scanUserWatchlist(watchlist);
+    }
     if (symbols.length === 0) { toast.error('No symbols to scan'); return; }
     setScanning(true);
     const start = Date.now();
