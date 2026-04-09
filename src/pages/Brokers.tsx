@@ -166,7 +166,7 @@ const Brokers = () => {
     setFields({});
     setShowPasswords({});
     setFieldErrors({});
-    setPaperTrading(false);
+    setPaperTrading(true);
     setAlpacaEnv('paper');
     setOandaEnv('practice');
   };
