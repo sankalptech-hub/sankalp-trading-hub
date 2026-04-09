@@ -110,6 +110,15 @@ const Scanner = () => {
     localStorage.setItem('scanner_custom_symbols', JSON.stringify(updated));
   };
 
+  const saveAsWatchlist = async () => {
+    if (!saveWlName.trim() || !user || results.length === 0) return;
+    const { data: wl } = await supabase.from('watchlists').insert({ user_id: user.id, name: saveWlName.trim(), color: '#f59e0b', is_default: false } as any).select().single();
+    if (!wl) { toast.error('Failed to create watchlist'); return; }
+    await supabase.from('watchlist_symbols').insert(results.map(r => ({ watchlist_id: wl.id, user_id: user.id, symbol: r.symbol })) as any);
+    toast.success(`Watchlist "${saveWlName}" created with ${results.length} symbols`);
+    setShowSaveWl(false); setSaveWlName('');
+  };
+
   const signalColor: Record<string, string> = { BUY: 'bg-emerald-500/20 text-emerald-400', SELL: 'bg-red-500/20 text-red-400', HOLD: 'bg-yellow-500/20 text-yellow-400' };
 
   return (
@@ -201,6 +210,25 @@ const Scanner = () => {
           </CardContent>
         </Card>
       )}
+
+      {results.length > 0 && (
+        <Button variant="outline" onClick={() => setShowSaveWl(true)}>
+          <Bookmark className="h-4 w-4 mr-2" /> Save scan results as new watchlist
+        </Button>
+      )}
+
+      <Dialog open={showSaveWl} onOpenChange={setShowSaveWl}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Save as Watchlist</DialogTitle>
+            <DialogDescription>Create a new watchlist from {results.length} scanned symbols</DialogDescription>
+          </DialogHeader>
+          <Input placeholder="Watchlist name" value={saveWlName} onChange={e => setSaveWlName(e.target.value)} />
+          <DialogFooter>
+            <Button onClick={saveAsWatchlist} disabled={!saveWlName.trim()}>Create Watchlist</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
