@@ -29,6 +29,12 @@ import BuildTracker from "./pages/BuildTracker";
 import Settings from "./pages/Settings";
 import AdminPanel from "./pages/AdminPanel";
 import AssetAnalysis from "./pages/AssetAnalysis";
+import EAs from "./pages/EAs";
+import EADetail from "./pages/EADetail";
+import Positions from "./pages/Positions";
+import OptionsScreener from "./pages/OptionsScreener";
+import MarketAnalysis from "./pages/MarketAnalysis";
+import AssociateDashboard from "./pages/AssociateDashboard";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -70,6 +76,12 @@ const App = () => {
                 <Route path="/history" element={<History />} />
                 <Route path="/analytics" element={<Analytics />} />
                 <Route path="/asset-analysis" element={<AssetAnalysis />} />
+                <Route path="/eas" element={<EAs />} />
+                <Route path="/eas/:id" element={<EADetail />} />
+                <Route path="/positions" element={<Positions />} />
+                <Route path="/options-screener" element={<OptionsScreener />} />
+                <Route path="/market-analysis" element={<MarketAnalysis />} />
+                <Route path="/associate" element={<AssociateDashboard />} />
                 <Route path="/risk" element={<Risk />} />
                 <Route path="/brokers" element={<Brokers />} />
                 <Route path="/alerts" element={<Alerts />} />
