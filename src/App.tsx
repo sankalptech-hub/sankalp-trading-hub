@@ -5,6 +5,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { TradingModeProvider } from "@/contexts/TradingModeContext";
 import ProtectedLayout from "@/components/ProtectedLayout";
 import RiskDisclosureModal from "@/components/marketing/RiskDisclosureModal";
 import Landing from "./pages/marketing/Landing";
@@ -53,6 +54,7 @@ const App = () => {
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
       <ThemeProvider>
+        <TradingModeProvider>
         <TooltipProvider>
           <Sonner />
           {showRisk && <RiskDisclosureModal onAccept={acceptRisk} />}
@@ -94,6 +96,7 @@ const App = () => {
             </Routes>
           </BrowserRouter>
         </TooltipProvider>
+        </TradingModeProvider>
       </ThemeProvider>
     </AuthProvider>
   </QueryClientProvider>
