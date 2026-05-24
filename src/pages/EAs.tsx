@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Play, Pause, Plus, Cpu, Trash2, Zap, TrendingUp, Target, Activity, Sparkles } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Play, Pause, Plus, Cpu, Trash2, Zap, TrendingUp, Target, Activity, Sparkles, Clock, Goal } from 'lucide-react';
 import { toast } from 'sonner';
 import { EA_TEMPLATES, EATemplate } from '@/lib/eaTemplates';
 
@@ -75,6 +76,40 @@ const EAs = () => {
     : r === 'Medium' ? 'text-amber-500 border-amber-500/30 bg-amber-500/10'
     : 'text-destructive border-destructive/30 bg-destructive/10';
 
+  const categories: Array<'All' | EATemplate['category']> = ['All', 'Forex', 'Stocks', 'Options'];
+  const renderGrid = (items: EATemplate[]) => (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {items.map(t => (
+        <div key={t.id} className="border rounded-lg p-4 bg-card/50 hover:border-primary/50 transition-colors flex flex-col">
+          <div className="flex items-start justify-between mb-2">
+            <div>
+              <div className="font-semibold flex items-center gap-1.5"><Zap className="h-4 w-4 text-primary" />{t.name}</div>
+              <div className="text-xs text-muted-foreground mt-0.5 font-mono">{t.symbol} · {t.timeframe} · {t.strategy}</div>
+            </div>
+            <div className="flex flex-col gap-1 items-end">
+              <Badge variant="outline" className="text-[10px]">{t.category}</Badge>
+              <Badge variant="outline" className={`text-[10px] ${riskColor(t.risk)}`}>{t.risk} risk</Badge>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground mb-3 flex-1">{t.description}</p>
+          <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
+            <div className="flex items-center gap-1 text-muted-foreground"><Clock className="h-3 w-3"/><span className="truncate">{t.holdingTime}</span></div>
+            <div className="flex items-center gap-1 text-emerald-500"><Goal className="h-3 w-3"/><span className="truncate font-medium">{t.target}</span></div>
+          </div>
+          <div className="grid grid-cols-4 gap-2 text-center mb-3 pt-3 border-t">
+            <div><div className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5"><Target className="h-2.5 w-2.5"/>Win</div><div className="text-sm font-mono font-semibold text-emerald-500">{t.metrics.winRate}%</div></div>
+            <div><div className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5"><TrendingUp className="h-2.5 w-2.5"/>PF</div><div className="text-sm font-mono font-semibold">{t.metrics.profitFactor}</div></div>
+            <div><div className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5"><Activity className="h-2.5 w-2.5"/>Sharpe</div><div className="text-sm font-mono font-semibold">{t.metrics.sharpe}</div></div>
+            <div><div className="text-[10px] text-muted-foreground">Max DD</div><div className="text-sm font-mono font-semibold text-destructive">{t.metrics.maxDD}%</div></div>
+          </div>
+          <Button size="sm" className="w-full" disabled={deploying === t.id} onClick={() => deployTemplate(t)}>
+            {deploying === t.id ? 'Deploying…' : <><Play className="h-3 w-3 mr-1"/>Deploy EA</>}
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -104,33 +139,24 @@ const EAs = () => {
             <Badge variant="outline" className="ml-2 text-xs">Back-tested · One-click deploy</Badge>
           </CardTitle>
           <p className="text-sm text-muted-foreground mt-1">
-            Pre-built, back-tested EAs ready to run on your default broker. Tap Deploy to start instantly.
+            Pre-built, back-tested strategies for Forex, Stocks and Options — each with target return and holding time. Deploy in one click.
           </p>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {EA_TEMPLATES.map(t => (
-              <div key={t.id} className="border rounded-lg p-4 bg-card/50 hover:border-primary/50 transition-colors flex flex-col">
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <div className="font-semibold flex items-center gap-1.5"><Zap className="h-4 w-4 text-primary" />{t.name}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5 font-mono">{t.symbol} · {t.timeframe} · {t.strategy}</div>
-                  </div>
-                  <Badge variant="outline" className={`text-[10px] ${riskColor(t.risk)}`}>{t.risk} risk</Badge>
-                </div>
-                <p className="text-xs text-muted-foreground mb-3 flex-1">{t.description}</p>
-                <div className="grid grid-cols-4 gap-2 text-center mb-3 pt-3 border-t">
-                  <div><div className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5"><Target className="h-2.5 w-2.5"/>Win</div><div className="text-sm font-mono font-semibold text-emerald-500">{t.metrics.winRate}%</div></div>
-                  <div><div className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5"><TrendingUp className="h-2.5 w-2.5"/>PF</div><div className="text-sm font-mono font-semibold">{t.metrics.profitFactor}</div></div>
-                  <div><div className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5"><Activity className="h-2.5 w-2.5"/>Sharpe</div><div className="text-sm font-mono font-semibold">{t.metrics.sharpe}</div></div>
-                  <div><div className="text-[10px] text-muted-foreground">Max DD</div><div className="text-sm font-mono font-semibold text-destructive">{t.metrics.maxDD}%</div></div>
-                </div>
-                <Button size="sm" className="w-full" disabled={deploying === t.id} onClick={() => deployTemplate(t)}>
-                  {deploying === t.id ? 'Deploying…' : <><Play className="h-3 w-3 mr-1"/>Deploy EA</>}
-                </Button>
-              </div>
+          <Tabs defaultValue="All">
+            <TabsList className="mb-4">
+              {categories.map(c => (
+                <TabsTrigger key={c} value={c}>
+                  {c} {c !== 'All' && <span className="ml-1 text-xs opacity-60">({EA_TEMPLATES.filter(t => t.category === c).length})</span>}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {categories.map(c => (
+              <TabsContent key={c} value={c}>
+                {renderGrid(c === 'All' ? EA_TEMPLATES : EA_TEMPLATES.filter(t => t.category === c))}
+              </TabsContent>
             ))}
-          </div>
+          </Tabs>
         </CardContent>
       </Card>
 
