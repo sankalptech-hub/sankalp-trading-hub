@@ -1,10 +1,16 @@
+import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import ProtectedLayout from "@/components/ProtectedLayout";
+import RiskDisclosureModal from "@/components/marketing/RiskDisclosureModal";
+import Landing from "./pages/marketing/Landing";
+import Features from "./pages/marketing/Features";
+import MlmInfo from "./pages/marketing/MlmInfo";
+import StaticPage from "./pages/marketing/StaticPage";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Trade from "./pages/Trade";
@@ -27,16 +33,32 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
-const App = () => (
+const App = () => {
+  const [showRisk, setShowRisk] = useState(false);
+  useEffect(() => {
+    if (!localStorage.getItem('tradesphere_risk_accepted')) setShowRisk(true);
+  }, []);
+  const acceptRisk = () => {
+    localStorage.setItem('tradesphere_risk_accepted', 'yes');
+    setShowRisk(false);
+  };
+
+  return (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
       <ThemeProvider>
         <TooltipProvider>
           <Sonner />
+          {showRisk && <RiskDisclosureModal onAccept={acceptRisk} />}
           <BrowserRouter>
             <Routes>
+              <Route path="/" element={<Landing />} />
+              <Route path="/features" element={<Features />} />
+              <Route path="/mlm-info" element={<MlmInfo />} />
+              <Route path="/privacy-policy" element={<StaticPage slug="privacy" />} />
+              <Route path="/terms-of-service" element={<StaticPage slug="terms" />} />
+              <Route path="/payment-refund-policy" element={<StaticPage slug="refund" />} />
               <Route path="/login" element={<Login />} />
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route element={<ProtectedLayout />}>
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/trade" element={<Trade />} />
@@ -63,6 +85,7 @@ const App = () => (
       </ThemeProvider>
     </AuthProvider>
   </QueryClientProvider>
-);
+  );
+};
 
 export default App;
