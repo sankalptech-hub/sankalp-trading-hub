@@ -41,6 +41,66 @@ export type Database = {
         }
         Relationships: []
       }
+      associate_network: {
+        Row: {
+          downline_user_id: string
+          id: string
+          joined_at: string
+          level: number
+          user_id: string
+        }
+        Insert: {
+          downline_user_id: string
+          id?: string
+          joined_at?: string
+          level: number
+          user_id: string
+        }
+        Update: {
+          downline_user_id?: string
+          id?: string
+          joined_at?: string
+          level?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      associate_payouts: {
+        Row: {
+          amount: number
+          created_at: string
+          currency: string
+          id: string
+          notes: string | null
+          paid_at: string | null
+          period: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          currency?: string
+          id?: string
+          notes?: string | null
+          paid_at?: string | null
+          period: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          currency?: string
+          id?: string
+          notes?: string | null
+          paid_at?: string | null
+          period?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       broker_accounts: {
         Row: {
           account_id: string
@@ -219,6 +279,127 @@ export type Database = {
         }
         Relationships: []
       }
+      ea_trades: {
+        Row: {
+          closed_at: string | null
+          ea_id: string
+          entry: number
+          exit: number | null
+          id: string
+          is_open: boolean
+          lots: number
+          opened_at: string
+          pnl: number
+          side: string
+          user_id: string
+        }
+        Insert: {
+          closed_at?: string | null
+          ea_id: string
+          entry: number
+          exit?: number | null
+          id?: string
+          is_open?: boolean
+          lots: number
+          opened_at?: string
+          pnl?: number
+          side: string
+          user_id: string
+        }
+        Update: {
+          closed_at?: string | null
+          ea_id?: string
+          entry?: number
+          exit?: number | null
+          id?: string
+          is_open?: boolean
+          lots?: number
+          opened_at?: string
+          pnl?: number
+          side?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ea_trades_ea_id_fkey"
+            columns: ["ea_id"]
+            isOneToOne: false
+            referencedRelation: "eas"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      eas: {
+        Row: {
+          created_at: string
+          id: string
+          lot_size: number
+          name: string
+          pnl: number
+          status: string
+          strategy: string | null
+          symbol: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          lot_size?: number
+          name: string
+          pnl?: number
+          status?: string
+          strategy?: string | null
+          symbol: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          lot_size?: number
+          name?: string
+          pnl?: number
+          status?: string
+          strategy?: string | null
+          symbol?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      equity_points: {
+        Row: {
+          ea_id: string | null
+          equity: number
+          id: string
+          ts: string
+          user_id: string
+        }
+        Insert: {
+          ea_id?: string | null
+          equity: number
+          id?: string
+          ts?: string
+          user_id: string
+        }
+        Update: {
+          ea_id?: string | null
+          equity?: number
+          id?: string
+          ts?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "equity_points_ea_id_fkey"
+            columns: ["ea_id"]
+            isOneToOne: false
+            referencedRelation: "eas"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       integrations: {
         Row: {
           config_json: Json | null
@@ -240,6 +421,30 @@ export type Database = {
           provider?: string
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      mlm_levels: {
+        Row: {
+          commission_pct: number
+          id: string
+          label: string
+          level: number
+          min_volume: number
+        }
+        Insert: {
+          commission_pct: number
+          id?: string
+          label: string
+          level: number
+          min_volume?: number
+        }
+        Update: {
+          commission_pct?: number
+          id?: string
+          label?: string
+          level?: number
+          min_volume?: number
         }
         Relationships: []
       }
