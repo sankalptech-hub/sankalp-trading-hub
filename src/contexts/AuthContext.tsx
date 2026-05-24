@@ -6,6 +6,7 @@ interface AuthContextType {
   session: Session | null;
   user: User | null;
   isAdmin: boolean;
+  isAssociate: boolean;
   loading: boolean;
   signOut: () => Promise<void>;
 }
@@ -14,6 +15,7 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   user: null,
   isAdmin: false,
+  isAssociate: false,
   loading: true,
   signOut: async () => {},
 });
@@ -24,17 +26,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isAssociate, setIsAssociate] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const checkAdminRole = async (userId: string) => {
+  const checkRoles = async (userId: string) => {
     try {
       const { data } = await supabase
         .from('user_roles')
         .select('role')
         .eq('user_id', userId);
-      setIsAdmin(!!data && data.some(r => r.role === 'admin'));
+      const roles = (data || []).map(r => r.role);
+      setIsAdmin(roles.includes('admin'));
+      setIsAssociate(roles.includes('associate'));
     } catch {
       setIsAdmin(false);
+      setIsAssociate(false);
     }
   };
 
@@ -47,10 +53,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(session?.user ?? null);
       setLoading(false);
       if (session?.user) {
-        // Check admin role after setting loading=false so UI isn't blocked
-        checkAdminRole(session.user.id);
+        checkRoles(session.user.id);
       } else {
         setIsAdmin(false);
+        setIsAssociate(false);
       }
     });
 
@@ -59,7 +65,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        await checkAdminRole(session.user.id);
+        await checkRoles(session.user.id);
       }
       setLoading(false);
     });
@@ -72,10 +78,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSession(null);
     setUser(null);
     setIsAdmin(false);
+    setIsAssociate(false);
   };
 
   return (
-    <AuthContext.Provider value={{ session, user, isAdmin, loading, signOut }}>
+    <AuthContext.Provider value={{ session, user, isAdmin, isAssociate, loading, signOut }}>
       {children}
     </AuthContext.Provider>
   );
