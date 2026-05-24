@@ -21,6 +21,7 @@ const mainItems = [
   { title: 'Scanner', url: '/scanner', icon: Radar },
   { title: 'Options Screener', url: '/options-screener', icon: Filter },
   { title: 'Watchlist', url: '/watchlist', icon: Bookmark },
+  { title: 'Options Watchlist', url: '/options-watchlist', icon: Layers },
 ];
 
 const strategyItems = [
