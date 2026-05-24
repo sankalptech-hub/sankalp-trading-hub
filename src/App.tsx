@@ -34,6 +34,7 @@ import EAs from "./pages/EAs";
 import EADetail from "./pages/EADetail";
 import Positions from "./pages/Positions";
 import OptionsScreener from "./pages/OptionsScreener";
+import OptionsWatchlist from "./pages/OptionsWatchlist";
 import MarketAnalysis from "./pages/MarketAnalysis";
 import AssociateDashboard from "./pages/AssociateDashboard";
 import NotFound from "./pages/NotFound";
@@ -82,6 +83,7 @@ const App = () => {
                 <Route path="/eas/:id" element={<EADetail />} />
                 <Route path="/positions" element={<Positions />} />
                 <Route path="/options-screener" element={<OptionsScreener />} />
+                <Route path="/options-watchlist" element={<OptionsWatchlist />} />
                 <Route path="/market-analysis" element={<MarketAnalysis />} />
                 <Route path="/associate" element={<AssociateDashboard />} />
                 <Route path="/risk" element={<Risk />} />
