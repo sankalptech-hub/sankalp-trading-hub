@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTradingMode } from '@/contexts/TradingModeContext';
 import { useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,8 +10,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { Loader2, AlertTriangle, Link as LinkIcon } from 'lucide-react';
+import { Loader2, AlertTriangle, Link as LinkIcon, FlaskConical } from 'lucide-react';
 import { fetchPrice, getCurrencySymbol, ALL_SYMBOLS } from '@/lib/marketData';
 
 const statusColor: Record<string, string> = {
@@ -21,6 +23,7 @@ const statusColor: Record<string, string> = {
 
 const Trade = () => {
   const { user } = useAuth();
+  const { brokers: ctxBrokers, paperMode, defaultBrokerName, defaultBroker, togglePaperLive, setDefaultBroker: setCtxDefault } = useTradingMode();
   const [params] = useSearchParams();
   const [symbol, setSymbol] = useState(params.get('symbol') || '');
   const [qty, setQty] = useState('');
@@ -31,8 +34,6 @@ const Trade = () => {
   const [livePrice, setLivePrice] = useState<{ price: number; cached: boolean } | null>(null);
   const [priceLoading, setPriceLoading] = useState(false);
   const [priceError, setPriceError] = useState('');
-  const [brokers, setBrokers] = useState<any[]>([]);
-  const [selectedBroker, setSelectedBroker] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   const fetchOrders = async () => {
@@ -41,15 +42,12 @@ const Trade = () => {
     setOrders(data || []);
   };
 
-  useEffect(() => {
-    fetchOrders();
-    if (!user) return;
-    supabase.from('brokers').select('*').eq('user_id', user.id).eq('status', 'connected').then(({ data }) => {
-      setBrokers(data || []);
-      const def = data?.find(b => b.is_default);
-      setSelectedBroker(def?.id || data?.[0]?.id || '');
-    });
-  }, [user]);
+  useEffect(() => { fetchOrders(); }, [user]);
+
+  // Only connected brokers can be used for trading
+  const brokers = ctxBrokers.filter(b => b.status === 'connected');
+  const selectedBroker = defaultBroker?.id || brokers[0]?.id || '';
+  const setSelectedBroker = (id: string) => { setCtxDefault(id); };
 
   const lookupPrice = async () => {
     if (!symbol.trim()) return;
@@ -146,7 +144,18 @@ const Trade = () => {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Trade Console</h1>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold">Trade Console</h1>
+        <div className="flex items-center gap-3 bg-card border rounded-lg px-4 py-2">
+          <FlaskConical className={`h-4 w-4 ${paperMode ? 'text-primary' : 'text-muted-foreground'}`} />
+          <span className={`text-sm font-medium ${paperMode ? 'text-primary' : 'text-muted-foreground'}`}>Paper</span>
+          <Switch checked={!paperMode} onCheckedChange={(checked) => togglePaperLive(!checked)} />
+          <span className={`text-sm font-medium ${!paperMode ? 'text-emerald-400' : 'text-muted-foreground'}`}>Live</span>
+          <Badge variant="outline" className={`text-[10px] ml-1 ${paperMode ? 'border-primary/30 text-primary' : 'border-emerald-500/30 text-emerald-400'}`}>
+            {defaultBrokerName}
+          </Badge>
+        </div>
+      </div>
 
       {isDemo && brokers.length <= 1 && (
         <div className="flex items-center gap-2 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded text-sm text-yellow-400">

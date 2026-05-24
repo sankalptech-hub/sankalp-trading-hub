@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTradingMode } from '@/contexts/TradingModeContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
-import { Plug, Eye, EyeOff, AlertTriangle } from 'lucide-react';
+import { Plug, Eye, EyeOff, AlertTriangle, FlaskConical } from 'lucide-react';
 
 interface BrokerTemplate {
   broker_name: string;
@@ -49,6 +50,7 @@ const statusColors: Record<string, string> = { connected: 'bg-emerald-500/20 tex
 const REGION_LABELS: Record<string, string> = { INDIA: '🇮🇳 India', GLOBAL: '🌍 Global', FOREX: '🌐 Forex', DEMO: '🧪 Paper / Demo' };
 
 const Brokers = () => {
+  const { paperMode, defaultBrokerName, togglePaperLive, setDefaultBroker: setCtxDefault, refresh: refreshMode } = useTradingMode();
   const { user } = useAuth();
   const [brokers, setBrokers] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -76,10 +78,7 @@ const Brokers = () => {
 
   const setDefault = async (brokerId: string) => {
     if (!user) return;
-    for (const b of brokers) {
-      if (b.is_default) await supabase.from('brokers').update({ is_default: false } as any).eq('id', b.id);
-    }
-    await supabase.from('brokers').update({ is_default: true } as any).eq('id', brokerId);
+    await setCtxDefault(brokerId);
     toast.success('Default broker updated');
     load();
   };
@@ -155,12 +154,14 @@ const Brokers = () => {
     toast.success(`Connected to ${modalBroker.display_name}`);
     setModalBroker(null);
     load();
+    refreshMode();
   };
 
   const disconnect = async (brokerId: string) => {
     await supabase.from('brokers').update({ status: 'disconnected' } as any).eq('id', brokerId);
     toast.success('Disconnected');
     load();
+    refreshMode();
   };
 
   const testConnection = (name: string) => {
@@ -251,7 +252,18 @@ const Brokers = () => {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold flex items-center gap-2"><Plug className="h-6 w-6 text-primary" /> Broker Management</h1>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold flex items-center gap-2"><Plug className="h-6 w-6 text-primary" /> Broker Management</h1>
+        <div className="flex items-center gap-3 bg-card border rounded-lg px-4 py-2">
+          <FlaskConical className={`h-4 w-4 ${paperMode ? 'text-primary' : 'text-muted-foreground'}`} />
+          <span className={`text-sm font-medium ${paperMode ? 'text-primary' : 'text-muted-foreground'}`}>Paper</span>
+          <Switch checked={!paperMode} onCheckedChange={(checked) => togglePaperLive(!checked)} />
+          <span className={`text-sm font-medium ${!paperMode ? 'text-emerald-400' : 'text-muted-foreground'}`}>Live</span>
+          <Badge variant="outline" className={`text-[10px] ml-1 ${paperMode ? 'border-primary/30 text-primary' : 'border-emerald-500/30 text-emerald-400'}`}>
+            {defaultBrokerName}
+          </Badge>
+        </div>
+      </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[

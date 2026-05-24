@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTradingMode } from '@/contexts/TradingModeContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +20,7 @@ const statusColor: Record<string, string> = {
 
 const Dashboard = () => {
   const { user } = useAuth();
+  const { paperMode, defaultBrokerName, togglePaperLive } = useTradingMode();
   const navigate = useNavigate();
   const [positions, setPositions] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
@@ -28,57 +30,6 @@ const Dashboard = () => {
   const [userWatchlists, setUserWatchlists] = useState<any[]>([]);
   const [selectedWl, setSelectedWl] = useState<string>('default');
   const [activeSymbols, setActiveSymbols] = useState<string[]>(DASHBOARD_WATCHLIST);
-  const [paperMode, setPaperMode] = useState(true);
-  const [defaultBrokerName, setDefaultBrokerName] = useState('Demo');
-
-  const toggleTradingMode = useCallback(async (toPaper: boolean) => {
-    if (!user) return;
-    const { data: brokers } = await supabase.from('brokers').select('id, broker_name, display_name, is_default, status').eq('user_id', user.id);
-    if (!brokers?.length) return;
-
-    const demoBroker = brokers.find(b => b.broker_name === 'demo');
-    const connectedLive = brokers.filter(b => b.broker_name !== 'demo' && b.status === 'connected');
-    const liveBroker = connectedLive.find(b => b.is_default) || connectedLive[0];
-
-    if (toPaper) {
-      // Set demo as default
-      if (demoBroker) {
-        for (const b of brokers) {
-          if (b.is_default) await supabase.from('brokers').update({ is_default: false } as any).eq('id', b.id);
-        }
-        await supabase.from('brokers').update({ is_default: true } as any).eq('id', demoBroker.id);
-        setDefaultBrokerName('Demo / Paper');
-        toast.success('Switched to Paper Trading mode');
-      }
-    } else {
-      // Set first live broker as default
-      if (liveBroker) {
-        for (const b of brokers) {
-          if (b.is_default) await supabase.from('brokers').update({ is_default: false } as any).eq('id', b.id);
-        }
-        await supabase.from('brokers').update({ is_default: true } as any).eq('id', liveBroker.id);
-        setDefaultBrokerName(liveBroker.display_name);
-        toast.success(`Switched to Live Trading via ${liveBroker.display_name}`);
-      } else {
-        toast.error('No live broker connected. Configure one in Brokers page.');
-        setPaperMode(true);
-        return;
-      }
-    }
-    setPaperMode(toPaper);
-  }, [user]);
-
-  // Load current default broker on mount
-  useEffect(() => {
-    if (!user) return;
-    supabase.from('brokers').select('broker_name, display_name').eq('user_id', user.id).eq('is_default', true).maybeSingle().then(({ data }) => {
-      if (data) {
-        setPaperMode(data.broker_name === 'demo');
-        setDefaultBrokerName(data.broker_name === 'demo' ? 'Demo / Paper' : data.display_name);
-      }
-    });
-  }, [user]);
-
   const fetchAll = async () => {
     if (!user) return;
     try {
@@ -152,7 +103,7 @@ const Dashboard = () => {
           <span className={`text-sm font-medium ${paperMode ? 'text-primary' : 'text-muted-foreground'}`}>Paper</span>
           <Switch
             checked={!paperMode}
-            onCheckedChange={(checked) => toggleTradingMode(!checked)}
+            onCheckedChange={(checked) => togglePaperLive(!checked)}
           />
           <span className={`text-sm font-medium ${!paperMode ? 'text-emerald-400' : 'text-muted-foreground'}`}>Live</span>
           <Badge variant="outline" className={`text-[10px] ml-1 ${paperMode ? 'border-primary/30 text-primary' : 'border-emerald-500/30 text-emerald-400'}`}>
