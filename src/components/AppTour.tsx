@@ -8,9 +8,10 @@ import {
   Rocket, LayoutDashboard, Eye, Zap, LineChart, Cpu, Plug,
   ShieldCheck, Bell, Users, Brain, Trophy, ChevronLeft, ChevronRight, X,
   Layers3, Filter, Briefcase,
+  Banknote,
 } from 'lucide-react';
 
-const TOUR_KEY = 'tradesphere_tour_completed_v2';
+const TOUR_KEY = 'tradesphere_tour_completed_v3';
 
 type Step = {
   icon: React.ComponentType<{ className?: string }>;
@@ -83,6 +84,14 @@ const STEPS: Step[] = [
     tip: 'Always backtest a strategy on 6-12 months of data before deploying it live.',
     route: '/scanner',
     cta: 'Open Scanner',
+  },
+  {
+    icon: Banknote,
+    title: 'Smart Money Flow',
+    body: 'Open this every morning. See exactly where money is flowing — sector by sector, index pulse, top inflows / outflows, and a Smart Money panel showing names with 1.3-1.5x average volume. Toggle Intraday / Weekly / Monthly to pick the right setup.',
+    tip: 'Trade with the flow: pick a stock from the green sectors, confirm on Scanner, then add to Options Watchlist.',
+    route: '/money-flow',
+    cta: 'Open Money Flow',
   },
   {
     icon: Cpu,
