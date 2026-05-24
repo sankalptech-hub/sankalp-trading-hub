@@ -36,6 +36,7 @@ import Positions from "./pages/Positions";
 import OptionsScreener from "./pages/OptionsScreener";
 import OptionsWatchlist from "./pages/OptionsWatchlist";
 import MarketAnalysis from "./pages/MarketAnalysis";
+import MoneyFlow from "./pages/MoneyFlow";
 import AssociateDashboard from "./pages/AssociateDashboard";
 import NotFound from "./pages/NotFound";
 
@@ -85,6 +86,7 @@ const App = () => {
                 <Route path="/options-screener" element={<OptionsScreener />} />
                 <Route path="/options-watchlist" element={<OptionsWatchlist />} />
                 <Route path="/market-analysis" element={<MarketAnalysis />} />
+                <Route path="/money-flow" element={<MoneyFlow />} />
                 <Route path="/associate" element={<AssociateDashboard />} />
                 <Route path="/risk" element={<Risk />} />
                 <Route path="/brokers" element={<Brokers />} />
