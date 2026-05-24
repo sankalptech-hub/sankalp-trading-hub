@@ -8,8 +8,9 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Play, Pause, Plus, Cpu, Trash2 } from 'lucide-react';
+import { Play, Pause, Plus, Cpu, Trash2, Zap, TrendingUp, Target, Activity, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
+import { EA_TEMPLATES, EATemplate } from '@/lib/eaTemplates';
 
 type EA = { id: string; name: string; symbol: string; strategy: string | null; status: string; lot_size: number; pnl: number; created_at: string };
 
@@ -17,6 +18,7 @@ const EAs = () => {
   const { user } = useAuth();
   const [eas, setEas] = useState<EA[]>([]);
   const [open, setOpen] = useState(false);
+  const [deploying, setDeploying] = useState<string | null>(null);
   const [form, setForm] = useState({ name: '', symbol: 'EURUSD', strategy: 'Trend Follow', lot_size: '0.1' });
 
   const load = async () => {
@@ -51,6 +53,28 @@ const EAs = () => {
     toast.success('EA removed'); load();
   };
 
+  const deployTemplate = async (t: EATemplate) => {
+    if (!user) return;
+    setDeploying(t.id);
+    const { error } = await supabase.from('eas').insert({
+      user_id: user.id,
+      name: t.name,
+      symbol: t.symbol,
+      strategy: t.strategy,
+      lot_size: t.lot_size,
+      status: 'running',
+    });
+    setDeploying(null);
+    if (error) { toast.error(error.message); return; }
+    toast.success(`${t.name} deployed and running`);
+    load();
+  };
+
+  const riskColor = (r: EATemplate['risk']) =>
+    r === 'Low' ? 'text-emerald-500 border-emerald-500/30 bg-emerald-500/10'
+    : r === 'Medium' ? 'text-amber-500 border-amber-500/30 bg-amber-500/10'
+    : 'text-destructive border-destructive/30 bg-destructive/10';
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -72,6 +96,43 @@ const EAs = () => {
           </DialogContent>
         </Dialog>
       </div>
+
+      <Card className="border-primary/30">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-primary" /> Strategy Marketplace
+            <Badge variant="outline" className="ml-2 text-xs">Back-tested · One-click deploy</Badge>
+          </CardTitle>
+          <p className="text-sm text-muted-foreground mt-1">
+            Pre-built, back-tested EAs ready to run on your default broker. Tap Deploy to start instantly.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {EA_TEMPLATES.map(t => (
+              <div key={t.id} className="border rounded-lg p-4 bg-card/50 hover:border-primary/50 transition-colors flex flex-col">
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <div className="font-semibold flex items-center gap-1.5"><Zap className="h-4 w-4 text-primary" />{t.name}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5 font-mono">{t.symbol} · {t.timeframe} · {t.strategy}</div>
+                  </div>
+                  <Badge variant="outline" className={`text-[10px] ${riskColor(t.risk)}`}>{t.risk} risk</Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mb-3 flex-1">{t.description}</p>
+                <div className="grid grid-cols-4 gap-2 text-center mb-3 pt-3 border-t">
+                  <div><div className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5"><Target className="h-2.5 w-2.5"/>Win</div><div className="text-sm font-mono font-semibold text-emerald-500">{t.metrics.winRate}%</div></div>
+                  <div><div className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5"><TrendingUp className="h-2.5 w-2.5"/>PF</div><div className="text-sm font-mono font-semibold">{t.metrics.profitFactor}</div></div>
+                  <div><div className="text-[10px] text-muted-foreground flex items-center justify-center gap-0.5"><Activity className="h-2.5 w-2.5"/>Sharpe</div><div className="text-sm font-mono font-semibold">{t.metrics.sharpe}</div></div>
+                  <div><div className="text-[10px] text-muted-foreground">Max DD</div><div className="text-sm font-mono font-semibold text-destructive">{t.metrics.maxDD}%</div></div>
+                </div>
+                <Button size="sm" className="w-full" disabled={deploying === t.id} onClick={() => deployTemplate(t)}>
+                  {deploying === t.id ? 'Deploying…' : <><Play className="h-3 w-3 mr-1"/>Deploy EA</>}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader><CardTitle>Active EAs · {eas.length}</CardTitle></CardHeader>
