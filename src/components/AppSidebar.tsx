@@ -74,7 +74,7 @@ export function AppSidebar() {
           <SidebarGroupLabel>
             {!collapsed && (
               <span className="text-lg font-bold font-['Syne']">
-                <span className="text-primary">Sankalp</span> OS
+                <span className="text-foreground">Trade</span><span className="text-primary">Sphere</span>
               </span>
             )}
           </SidebarGroupLabel>
