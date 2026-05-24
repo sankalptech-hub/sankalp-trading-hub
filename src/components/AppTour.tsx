@@ -7,9 +7,10 @@ import { Progress } from '@/components/ui/progress';
 import {
   Rocket, LayoutDashboard, Eye, Zap, LineChart, Cpu, Plug,
   ShieldCheck, Bell, Users, Brain, Trophy, ChevronLeft, ChevronRight, X,
+  Layers3, Filter, Briefcase,
 } from 'lucide-react';
 
-const TOUR_KEY = 'tradesphere_tour_completed_v1';
+const TOUR_KEY = 'tradesphere_tour_completed_v2';
 
 type Step = {
   icon: React.ComponentType<{ className?: string }>;
@@ -44,12 +45,36 @@ const STEPS: Step[] = [
     cta: 'Open Watchlists',
   },
   {
+    icon: Layers3,
+    title: 'Options Watchlist',
+    body: 'Track CE / PE strikes for NIFTY, BANKNIFTY, FINNIFTY and any stock alongside plain equity tickers. Each row shows live spot, strike distance %, ITM / ATM / OTM badge, days-to-expiry and lot size.',
+    tip: 'Add weekly expiries close to spot for fast-decaying premium plays — and keep an eye on the "Expiring ≤ 7d" counter at the top.',
+    route: '/options-watchlist',
+    cta: 'Open Options Watchlist',
+  },
+  {
+    icon: Filter,
+    title: 'Options Screener',
+    body: 'Filter the option chain by underlying, expiry, moneyness and liquidity to find high-probability strikes before adding them to your watchlist.',
+    tip: 'Pair the screener with the Options Watchlist — screen → shortlist → track → trade.',
+    route: '/options-screener',
+    cta: 'Open Options Screener',
+  },
+  {
     icon: Zap,
     title: 'Place Your First Trade',
     body: 'Enter a symbol, quantity and side, then Execute. Generate a BUY/SELL signal first if you want a quick read on the symbol.',
     tip: 'In Paper mode, trades are simulated — perfect for learning without risk.',
     route: '/trade',
     cta: 'Open Trade Console',
+  },
+  {
+    icon: Briefcase,
+    title: 'Positions & History',
+    body: 'Live positions show unrealised P&L and exposure across currencies. History gives you closed-trade analytics — win rate, average R, holding time.',
+    tip: 'Review History weekly. Cut strategies whose win-rate slips below your backtest baseline.',
+    route: '/positions',
+    cta: 'Open Positions',
   },
   {
     icon: LineChart,
