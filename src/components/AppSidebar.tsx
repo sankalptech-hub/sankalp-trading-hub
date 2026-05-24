@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, TrendingUp, Radar, Bookmark, Wrench, BarChart3, Layers, Clock,
   PieChart, Shield, Plug, Bell, Bot, ListChecks, Settings, LogOut,
-  ShieldCheck, Sun, Moon, Activity,
+  ShieldCheck, Sun, Moon, Activity, Cpu, Briefcase, Filter, Globe, Award,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { MarketStatusHeader } from '@/components/MarketStatusHeader';
@@ -19,6 +19,7 @@ const mainItems = [
   { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard },
   { title: 'Trade', url: '/trade', icon: TrendingUp },
   { title: 'Scanner', url: '/scanner', icon: Radar },
+  { title: 'Options Screener', url: '/options-screener', icon: Filter },
   { title: 'Watchlist', url: '/watchlist', icon: Bookmark },
 ];
 
@@ -26,12 +27,15 @@ const strategyItems = [
   { title: 'Builder', url: '/builder', icon: Wrench },
   { title: 'Backtest', url: '/backtest', icon: BarChart3 },
   { title: 'Strategies', url: '/strategies', icon: Layers },
+  { title: 'Expert Advisors', url: '/eas', icon: Cpu },
 ];
 
 const portfolioItems = [
+  { title: 'Positions', url: '/positions', icon: Briefcase },
   { title: 'History', url: '/history', icon: Clock },
   { title: 'Analytics', url: '/analytics', icon: PieChart },
   { title: 'Asset Analysis', url: '/asset-analysis', icon: Activity },
+  { title: 'Market Analysis', url: '/market-analysis', icon: Globe },
   { title: 'Risk', url: '/risk', icon: Shield },
 ];
 
@@ -50,13 +54,17 @@ const adminItems = [
   { title: 'Admin Panel', url: '/admin', icon: ShieldCheck },
 ];
 
+const associateItems = [
+  { title: 'Associate Hub', url: '/associate', icon: Award },
+];
+
 type NavGroup = { label: string; items: typeof mainItems };
 
 export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
   const location = useLocation();
-  const { user, isAdmin, signOut } = useAuth();
+  const { user, isAdmin, isAssociate, signOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
   const groups: NavGroup[] = [
@@ -66,6 +74,7 @@ export function AppSidebar() {
     { label: 'Market', items: marketItems },
     { label: 'System', items: systemItems },
   ];
+  if (isAssociate || isAdmin) groups.push({ label: 'Partner', items: associateItems });
 
   return (
     <Sidebar collapsible="icon">
