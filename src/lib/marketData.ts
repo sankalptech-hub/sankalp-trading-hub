@@ -61,43 +61,53 @@ export function getCurrencySymbol(symbol: string): string {
   return '$';
 }
 
+export class PriceFetchError extends Error {
+  constructor(message: string, public symbol: string) {
+    super(message);
+    this.name = 'PriceFetchError';
+  }
+}
+
 export async function fetchPrice(symbol: string): Promise<PriceData> {
   const cached = getCached(symbol);
   if (cached) return { ...cached, cached: true };
 
   const upper = symbol.toUpperCase();
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(upper)}?interval=1d&range=5d`;
+
+  // Call the edge function URL directly with query params (functions.invoke doesn't
+  // pass query strings cleanly for GET requests).
+  const functionsUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-price`;
+  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('Failed to fetch price');
-    const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) throw new Error('Symbol not found');
-    const meta = result.meta;
-    const price = meta.regularMarketPrice ?? 0;
-    const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? price;
-    const change = price - prevClose;
-    const changePercent = prevClose > 0 ? (change / prevClose) * 100 : 0;
-    const volume = meta.regularMarketVolume ?? 0;
-    const high = meta.regularMarketDayHigh ?? price * 1.01;
-    const low = meta.regularMarketDayLow ?? price * 0.99;
-    const open = meta.regularMarketOpen ?? price;
-    const marketCap = meta.marketCap ?? 0;
-    const fiftyTwoWeekHigh = meta.fiftyTwoWeekHigh ?? price * 1.3;
-    const fiftyTwoWeekLow = meta.fiftyTwoWeekLow ?? price * 0.7;
+    const resp = await fetch(`${functionsUrl}?symbol=${encodeURIComponent(upper)}&mode=quote`, {
+      headers: { Authorization: `Bearer ${anonKey}`, apikey: anonKey },
+    });
+    const json = await resp.json();
 
-    const data: CachedPrice = { price, change, changePercent, volume, high, low, open, prevClose, marketCap, fiftyTwoWeekHigh, fiftyTwoWeekLow, timestamp: Date.now() };
+    if (!resp.ok || json.error) {
+      throw new PriceFetchError(json.error ?? `Request failed (${resp.status})`, upper);
+    }
+
+    const data: CachedPrice = {
+      price: json.price,
+      change: json.change,
+      changePercent: json.changePercent,
+      volume: json.volume,
+      high: json.high,
+      low: json.low,
+      open: json.open,
+      prevClose: json.prevClose,
+      marketCap: json.marketCap,
+      fiftyTwoWeekHigh: json.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: json.fiftyTwoWeekLow,
+      timestamp: Date.now(),
+    };
     setCache(symbol, data);
     return { ...data, cached: false };
-  } catch {
-    const price = 100 + Math.random() * 500;
-    const change = (Math.random() - 0.5) * 20;
-    const changePercent = (change / price) * 100;
-    const volume = Math.floor(Math.random() * 10000000);
-    const data: CachedPrice = { price, change, changePercent, volume, high: price * 1.02, low: price * 0.98, open: price - change * 0.5, prevClose: price - change, marketCap: price * 1e6, fiftyTwoWeekHigh: price * 1.3, fiftyTwoWeekLow: price * 0.7, timestamp: Date.now() };
-    setCache(symbol, data);
-    return { ...data, cached: false };
+  } catch (e) {
+    if (e instanceof PriceFetchError) throw e;
+    throw new PriceFetchError(`Network error fetching ${upper}`, upper);
   }
 }
 
@@ -144,53 +154,26 @@ export async function fetchCandleData(
   }
 
   const upper = symbol.toUpperCase();
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(upper)}?interval=${interval}&range=${range}`;
+  const functionsUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-price`;
+  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('Failed');
-    const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) throw new Error('No data');
+    const resp = await fetch(
+      `${functionsUrl}?symbol=${encodeURIComponent(upper)}&mode=candles&interval=${interval}&range=${range}`,
+      { headers: { Authorization: `Bearer ${anonKey}`, apikey: anonKey } }
+    );
+    const json = await resp.json();
 
-    const timestamps: number[] = result.timestamp || [];
-    const quote = result.indicators?.quote?.[0] || {};
-    const opens: number[] = quote.open || [];
-    const highs: number[] = quote.high || [];
-    const lows: number[] = quote.low || [];
-    const closes: number[] = quote.close || [];
-    const volumes: number[] = quote.volume || [];
-
-    const candles: CandleData[] = timestamps
-      .map((t, i) => ({
-        date: new Date(t * 1000).toISOString().split('T')[0],
-        open: opens[i] ?? 0,
-        high: highs[i] ?? 0,
-        low: lows[i] ?? 0,
-        close: closes[i] ?? 0,
-        volume: volumes[i] ?? 0,
-      }))
-      .filter(c => c.close > 0 && c.open > 0);
-
-    setCandleCache(symbol, interval, range, candles);
-    return candles;
-  } catch {
-    const days = range === '1d' ? 1 : range === '5d' ? 5 : range === '1mo' ? 22 : range === '3mo' ? 66 : range === '6mo' ? 132 : range === '1y' ? 252 : range === '5y' ? 1260 : 22;
-    const candles: CandleData[] = [];
-    let price = 100 + Math.random() * 500;
-    const now = new Date();
-    for (let i = days; i >= 0; i--) {
-      const d = new Date(now); d.setDate(d.getDate() - i);
-      const change = (Math.random() - 0.48) * price * 0.03;
-      const open = price;
-      const close = price + change;
-      const high = Math.max(open, close) + Math.random() * price * 0.01;
-      const low = Math.min(open, close) - Math.random() * price * 0.01;
-      candles.push({ date: d.toISOString().split('T')[0], open, high, low, close, volume: Math.floor(Math.random() * 10000000) });
-      price = close;
+    if (!resp.ok || json.error) {
+      throw new PriceFetchError(json.error ?? `Request failed (${resp.status})`, upper);
     }
+
+    const candles: CandleData[] = json.candles ?? [];
     setCandleCache(symbol, interval, range, candles);
     return candles;
+  } catch (e) {
+    if (e instanceof PriceFetchError) throw e;
+    throw new PriceFetchError(`Network error fetching candles for ${upper}`, upper);
   }
 }
 
