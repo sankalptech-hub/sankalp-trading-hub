@@ -34,6 +34,7 @@ interface BrokerTemplate {
 const BROKER_TEMPLATES: BrokerTemplate[] = [
   // INDIA
   { broker_name: 'zerodha', display_name: 'Zerodha (Kite Connect)', markets: 'NSE, BSE', fields: ['API Key', 'API Secret', 'Client ID', 'Access Token'], note: '', region: 'INDIA', flag: '🇮🇳', badge: 'Recommended for India', badgeColor: 'bg-emerald-500/20 text-emerald-400', color: 'bg-orange-500' },
+  { broker_name: 'groww', display_name: 'Groww', markets: 'NSE, BSE', fields: ['API Key', 'TOTP Secret'], note: "Generate an API key from Groww's web app under Settings > Trading APIs.", region: 'INDIA', flag: '🇮🇳', badge: 'Zero AMC', badgeColor: 'bg-teal-500/20 text-teal-400', color: 'bg-[#00D09C]' },
   // GLOBAL
   { broker_name: 'alpaca', display_name: 'Alpaca', markets: 'US Stocks, ETFs, Crypto', fields: ['API Key ID', 'API Secret Key'], note: 'Zero commission US stocks & ETFs. Paper trading available.', isAlpaca: true, region: 'GLOBAL', flag: '🇺🇸', badge: 'Best for Global', badgeColor: 'bg-yellow-500/20 text-yellow-400', color: 'bg-[#FFCD00]', extras: ['Environment'] },
   { broker_name: 'ibkr', display_name: 'Interactive Brokers', markets: '150+ global exchanges', fields: ['Account ID', 'TWS Port', 'Client ID'], note: 'Requires TWS or IB Gateway running on your computer. Best for professional traders.', region: 'GLOBAL', flag: '🌍', badge: 'Professional Grade', badgeColor: 'bg-red-500/20 text-red-400', color: 'bg-red-600', extras: ['Paper Trading'], comingSoon: true },
