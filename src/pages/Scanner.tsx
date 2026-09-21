@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { useRealtimeSignals } from '@/hooks/useRealtime';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -24,8 +26,17 @@ interface ScanResult {
   currency: string;
 }
 
+const signalTypeColor: Record<string, string> = {
+  BUY: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+  SELL: 'bg-red-500/20 text-red-400 border-red-500/30',
+  STRONG_BUY: 'bg-emerald-500/30 text-emerald-300 border-emerald-400/50',
+  STRONG_SELL: 'bg-red-500/30 text-red-300 border-red-400/50',
+  HOLD: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+};
+
 const Scanner = () => {
   const { user } = useAuth();
+  const { signals } = useRealtimeSignals(user?.id);
   const [watchlist, setWatchlist] = useState('NSE_MAIN');
   const [provider, setProvider] = useState('yahoo');
   const [results, setResults] = useState<ScanResult[]>([]);
@@ -126,6 +137,17 @@ const Scanner = () => {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold flex items-center gap-2"><Radar className="h-6 w-6 text-primary" /> Scanner</h1>
+
+      <Tabs defaultValue="scan">
+        <TabsList>
+          <TabsTrigger value="scan">Live Scan</TabsTrigger>
+          <TabsTrigger value="signals">
+            Saved Signals
+            {signals.length > 0 && <span className="ml-2 bg-primary/20 text-primary text-xs rounded-full px-1.5">{signals.length}</span>}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="scan" className="space-y-6">
       <Card className="card-glow">
         <CardContent className="pt-6">
           <div className="flex flex-wrap gap-4 items-end">
@@ -227,6 +249,46 @@ const Scanner = () => {
           <Bookmark className="h-4 w-4 mr-2" /> Save scan results as new watchlist
         </Button>
       )}
+        </TabsContent>
+
+        <TabsContent value="signals">
+          <Card className="card-glow">
+            <CardHeader><CardTitle>Saved Signals (Real-time · last 50)</CardTitle></CardHeader>
+            <CardContent>
+              {signals.length === 0 ? (
+                <div className="text-center text-muted-foreground py-12">No signals yet. Run a scan and click "Signal" to save one.</div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Symbol</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Price</TableHead>
+                      <TableHead>When</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {signals.map(s => (
+                      <TableRow key={s.id}>
+                        <TableCell className="font-mono font-semibold">{s.symbol}</TableCell>
+                        <TableCell>
+                          <span className={`px-2 py-0.5 rounded text-xs border ${signalTypeColor[s.signal_type] || signalTypeColor.HOLD}`}>
+                            {s.signal_type}
+                          </span>
+                        </TableCell>
+                        <TableCell className="font-mono">₹{Number(s.price).toFixed(2)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground font-mono">
+                          {new Date(s.created_at).toLocaleString()}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={showSaveWl} onOpenChange={setShowSaveWl}>
         <DialogContent className="sm:max-w-sm">
