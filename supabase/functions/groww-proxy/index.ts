@@ -1,13 +1,15 @@
 // Supabase Edge Function: groww-proxy
 //
 // Server-side proxy for the Groww Trading API (https://groww.in/trade-api/docs).
-// The user's Groww API key/TOTP secret NEVER reach the browser: they're posted
+// The user's Groww API key/secret NEVER reach the browser: they're posted
 // here once (action=connect), stored in public.broker_secrets (service-role
 // only, no client RLS access), and every subsequent action re-derives a fresh
-// access token server-side by computing a live TOTP code from the stored
-// secret (confirmed against Groww's real API-key dashboard: it issues an
-// "API Key" + "TOTP Secret" pair for the key_type=totp flow — there is no
-// key+secret+checksum "approval" flow exposed there).
+// access token server-side. Groww's dashboard issues three different key
+// types: a daily-refreshed "Access Token" (not supported here — would need
+// manual daily refresh), a "TOTP" API Key + TOTP Secret pair (auth_mode
+// "totp", live/long-lived), and an "Approval" API Key + API Secret pair
+// (auth_mode "approval", SHA-256 checksum flow) — both of the latter two are
+// supported and selected per-connection via payload.auth_mode.
 //
 // IMPORTANT: the exact shape of the POST /v1/token/api/access response wasn't
 // fully pinned down from Groww's docs at implementation time (conflicting
@@ -67,6 +69,16 @@ function base32Decode(input: string): Uint8Array {
   return new Uint8Array(bytes);
 }
 
+// "Approval"-mode auth: Groww also issues API Key + API Secret pairs (shown
+// in their dashboard as "API Secret", a plain password-like string — distinct
+// from the base32 "TOTP Secret"). The access-token request for this mode
+// uses a SHA-256 checksum of secret+timestamp instead of a TOTP code.
+async function sha256Hex(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function generateTotp(base32Secret: string): Promise<string> {
   const key = base32Decode(base32Secret);
   const counter = Math.floor(Date.now() / 1000 / 30);
@@ -112,12 +124,19 @@ function extractAccessToken(body: any): { token: string; expiresAt: string | nul
   return { token, expiresAt: expiry };
 }
 
-async function fetchFreshAccessToken(apiKey: string, totpSecret: string) {
-  const totp = await generateTotp(totpSecret);
+async function fetchFreshAccessToken(apiKey: string, secret: string, authMode: "totp" | "approval") {
+  let reqBody: Record<string, string>;
+  if (authMode === "totp") {
+    reqBody = { key_type: "totp", totp: await generateTotp(secret) };
+  } else {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    reqBody = { key_type: "approval", checksum: await sha256Hex(secret + timestamp), timestamp };
+  }
+
   const res = await fetch(`${GROWW_BASE}/token/api/access`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...RELAY_HEADERS },
-    body: JSON.stringify({ key_type: "totp", totp }),
+    body: JSON.stringify(reqBody),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body?.status === "FAILURE") {
@@ -168,8 +187,8 @@ async function getAccessTokenForUser(admin: ReturnType<typeof createClient>, use
     if (expiresAt - now > 60_000) return secretRow.cached_access_token as string;
   }
 
-  const { api_key, totp_secret } = secretRow.secret_json as { api_key: string; totp_secret: string };
-  const { token, expiresAt } = await fetchFreshAccessToken(api_key, totp_secret);
+  const { api_key, secret, auth_mode } = secretRow.secret_json as { api_key: string; secret: string; auth_mode: "totp" | "approval" };
+  const { token, expiresAt } = await fetchFreshAccessToken(api_key, secret, auth_mode);
   const cachedExpiresAt = expiresAt && !Number.isNaN(Date.parse(expiresAt))
     ? new Date(expiresAt).toISOString()
     : nextSixAmIstIso();
@@ -205,13 +224,14 @@ serve(async (req) => {
 
     if (action === "connect") {
       const apiKey = payload?.api_key?.trim();
-      const totpSecret = payload?.totp_secret?.trim();
-      if (!apiKey || !totpSecret) return json({ error: "API Key and TOTP Secret are required" }, 400);
+      const secret = payload?.secret?.trim();
+      const authMode: "totp" | "approval" = payload?.auth_mode === "approval" ? "approval" : "totp";
+      if (!apiKey || !secret) return json({ error: "API Key and Secret are required" }, 400);
 
       // Live test against the real endpoint before persisting anything.
       let token: string, expiresAt: string | null;
       try {
-        ({ token, expiresAt } = await fetchFreshAccessToken(apiKey, totpSecret));
+        ({ token, expiresAt } = await fetchFreshAccessToken(apiKey, secret, authMode));
       } catch (e) {
         return json({ error: `Could not authenticate with Groww: ${e instanceof Error ? e.message : e}` }, 400);
       }
@@ -223,7 +243,7 @@ serve(async (req) => {
       const { error: upsertErr } = await admin.from("broker_secrets").upsert({
         user_id: user.id,
         broker_name: "groww",
-        secret_json: { api_key: apiKey, totp_secret: totpSecret },
+        secret_json: { api_key: apiKey, secret, auth_mode: authMode },
         cached_access_token: token,
         cached_token_expires_at: cachedExpiresAt,
       }, { onConflict: "user_id,broker_name" });

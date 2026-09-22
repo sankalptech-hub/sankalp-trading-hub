@@ -64,6 +64,7 @@ const Brokers = () => {
   const [alpacaEnv, setAlpacaEnv] = useState<'paper' | 'live'>('paper');
   const [oandaEnv, setOandaEnv] = useState<'practice' | 'live'>('practice');
   const [growwConnecting, setGrowwConnecting] = useState(false);
+  const [growwAuthMode, setGrowwAuthMode] = useState<'totp' | 'approval'>('totp');
   const [testingBroker, setTestingBroker] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -140,15 +141,17 @@ const Brokers = () => {
     load();
   };
 
+  const growwSecretLabel = growwAuthMode === 'totp' ? 'TOTP Secret' : 'API Secret';
+
   const saveGroww = async () => {
     if (!user || !modalBroker) return;
     const errors: Record<string, string> = {};
     if (!fields['API Key']?.trim()) errors['API Key'] = 'Required';
-    if (!fields['TOTP Secret']?.trim()) errors['TOTP Secret'] = 'Required';
+    if (!fields[growwSecretLabel]?.trim()) errors[growwSecretLabel] = 'Required';
     if (Object.keys(errors).length > 0) { setFieldErrors(errors); return; }
 
     setGrowwConnecting(true);
-    const res = await groww.connect(fields['API Key'].trim(), fields['TOTP Secret'].trim());
+    const res = await groww.connect(fields['API Key'].trim(), fields[growwSecretLabel].trim(), growwAuthMode);
     setGrowwConnecting(false);
     if (res.error) { toast.error(`Groww connection failed: ${res.error}`); return; }
 
@@ -270,12 +273,19 @@ const Brokers = () => {
         <AlertTriangle className="h-4 w-4 flex-shrink-0" /> This connects your real Groww account. Once connected and switched to Live mode, orders placed from the Trade page execute with real money.
       </div>
       <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-400">
-        Requires an active Groww Trading API subscription (₹499+tax/month). On groww.in → API Keys, click <span className="font-semibold">Generate API key → Generate TOTP token</span> (not "Generate Access Token" — that one expires daily and can't be used here). Credentials are sent straight to a server-side function and are never stored in your browser.
+        Requires an active Groww Trading API subscription (₹499+tax/month). On groww.in → API Keys, use either <span className="font-semibold">Generate TOTP token</span> or <span className="font-semibold">Generate API key</span> (Approval-type) — not "Generate Access Token", which expires daily and can't be used here. Credentials are sent straight to a server-side function and are never stored in your browser.
       </div>
       <div className="p-3 bg-orange-500/10 border border-orange-500/20 rounded text-xs text-orange-400">
-        SEBI requires a static IP registered against your API key before it can place orders (deadline was 31 Mar 2026). That isn't wired up yet — order placement may be rejected by Groww until it is. Holdings/positions/funds/quotes work regardless.
+        SEBI requires a static IP registered against your API key before it can place orders. Make sure you've registered {"46.224.118.179"} on Groww's API Keys page ("Add static IP" / "Update static IP") before trying to place real orders.
       </div>
-      {['API Key', 'TOTP Secret'].map(f => (
+      <div>
+        <Label className="mb-2 block">Key type</Label>
+        <RadioGroup value={growwAuthMode} onValueChange={(v) => setGrowwAuthMode(v as 'totp' | 'approval')} className="flex gap-4">
+          <div className="flex items-center gap-2"><RadioGroupItem value="totp" id="groww-totp" /><Label htmlFor="groww-totp">TOTP</Label></div>
+          <div className="flex items-center gap-2"><RadioGroupItem value="approval" id="groww-approval" /><Label htmlFor="groww-approval">API Secret</Label></div>
+        </RadioGroup>
+      </div>
+      {['API Key', growwSecretLabel].map(f => (
         <div key={f}>
           <Label>{f} *</Label>
           <div className="relative">
