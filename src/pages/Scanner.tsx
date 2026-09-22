@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { Loader2, Radar, Bookmark } from 'lucide-react';
-import { fetchPrice, getCurrencySymbol, WATCHLIST_NSE_MAIN, WATCHLIST_NSE_TECH, WATCHLIST_US_TECH, WATCHLIST_US_FINANCE, WATCHLIST_CANADA_TSX, WATCHLIST_UK_LSE, WATCHLIST_GLOBAL_ETFS } from '@/lib/marketData';
+import { fetchPrice, fetchCandleData, computeRSI, computeATR, getCurrencySymbol, WATCHLIST_NSE_MAIN, WATCHLIST_NSE_TECH, WATCHLIST_US_TECH, WATCHLIST_US_FINANCE, WATCHLIST_CANADA_TSX, WATCHLIST_UK_LSE, WATCHLIST_GLOBAL_ETFS } from '@/lib/marketData';
 import { EXCHANGES, getExchangeForSymbol } from '@/lib/marketHours';
 
 interface ScanResult {
@@ -38,7 +38,6 @@ const Scanner = () => {
   const { user } = useAuth();
   const { signals } = useRealtimeSignals(user?.id);
   const [watchlist, setWatchlist] = useState('NSE_MAIN');
-  const [provider, setProvider] = useState('yahoo');
   const [results, setResults] = useState<ScanResult[]>([]);
   const [scanning, setScanning] = useState(false);
   const [lastScanned, setLastScanned] = useState<Date | null>(null);
@@ -90,9 +89,15 @@ const Scanner = () => {
 
     for (const sym of symbols) {
       try {
-        const data = await fetchPrice(sym);
-        const rsi14 = provider === 'yahoo' ? 30 + Math.random() * 40 : 25 + Math.random() * 50;
-        const atrPct = Math.abs(data.changePercent) * 1.5;
+        const [data, candles] = await Promise.all([
+          fetchPrice(sym),
+          fetchCandleData(sym, '1d', '3mo'),
+        ]);
+        const rsiSeries = computeRSI(candles, 14);
+        const atrSeries = computeATR(candles, 14);
+        const rsi14 = rsiSeries[rsiSeries.length - 1] ?? 50;
+        const lastAtr = atrSeries[atrSeries.length - 1];
+        const atrPct = lastAtr !== null && data.price ? (lastAtr / data.price) * 100 : 0;
         const signal: 'BUY' | 'SELL' | 'HOLD' = rsi14 < 35 ? 'BUY' : rsi14 > 65 ? 'SELL' : 'HOLD';
         scanned.push({ symbol: sym, price: data.price, changePct: data.changePercent, volume: data.volume, rsi14, atrPct, signal, currency: getCurrencySymbol(sym) });
       } catch { /* skip */ }
@@ -165,16 +170,6 @@ const Scanner = () => {
                   <SelectItem value="GLOBAL_ETFS">🌍 Global ETFs</SelectItem>
                   <SelectItem value="CUSTOM">Custom</SelectItem>
                   {userWatchlists.map((wl: any) => <SelectItem key={wl.id} value={wl.id}>📌 {wl.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Provider</label>
-              <Select value={provider} onValueChange={setProvider}>
-                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="yahoo">Yahoo Finance</SelectItem>
-                  <SelectItem value="demo">Demo (Mock)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -13,7 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { Loader2, AlertTriangle, Link as LinkIcon, FlaskConical } from 'lucide-react';
-import { fetchPrice, getCurrencySymbol, ALL_SYMBOLS } from '@/lib/marketData';
+import { fetchPrice, fetchCandleData, computeRSI, getCurrencySymbol, ALL_SYMBOLS } from '@/lib/marketData';
 
 const statusColor: Record<string, string> = {
   pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
@@ -74,12 +74,22 @@ const Trade = () => {
   const generateSignal = async () => {
     if (!symbol.trim()) { setErrors({ symbol: 'Symbol is required' }); return; }
     if (!user) return;
-    const q = Number(qty) || 50;
-    const signalType = q > 100 ? 'BUY' : q < 10 ? 'SELL' : 'HOLD';
-    const { data, error } = await supabase.from('signals').insert({ user_id: user.id, symbol: symbol.toUpperCase(), signal_type: signalType, price: q }).select().single();
-    if (error) { toast.error(error.message); return; }
-    setLastSignal(data);
-    toast.success(`Signal: ${signalType} ${symbol.toUpperCase()}`);
+    const upperSymbol = symbol.toUpperCase();
+    try {
+      const [priceData, candles] = await Promise.all([
+        fetchPrice(upperSymbol),
+        fetchCandleData(upperSymbol, '1d', '3mo'),
+      ]);
+      const rsi = computeRSI(candles, 14);
+      const latestRsi = rsi[rsi.length - 1];
+      const signalType: 'BUY' | 'SELL' | 'HOLD' = latestRsi === null ? 'HOLD' : latestRsi < 35 ? 'BUY' : latestRsi > 65 ? 'SELL' : 'HOLD';
+      const { data, error } = await supabase.from('signals').insert({ user_id: user.id, symbol: upperSymbol, signal_type: signalType, price: priceData.price }).select().single();
+      if (error) { toast.error(error.message); return; }
+      setLastSignal(data);
+      toast.success(`Signal: ${signalType} ${upperSymbol}${latestRsi !== null ? ` (RSI ${latestRsi.toFixed(1)})` : ''}`);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to generate signal');
+    }
   };
 
   const checkRisks = async (upperSymbol: string, quantity: number) => {
@@ -99,6 +109,17 @@ const Trade = () => {
     const { data: existingPos } = await supabase.from('positions').select('qty').eq('user_id', user.id).eq('symbol', upperSymbol).maybeSingle();
     if (existingPos && Math.abs(existingPos.qty) > 5000) { setErrors({ symbol: `Exposure limit: existing position in ${upperSymbol} exceeds 5000 units` }); return; }
 
+    let executionPrice = livePrice?.price;
+    if (!executionPrice) {
+      try {
+        const data = await fetchPrice(upperSymbol);
+        executionPrice = data.price;
+      } catch (err: any) {
+        setErrors({ symbol: err.message || `Could not fetch a live price for ${upperSymbol}` });
+        return;
+      }
+    }
+
     const broker = brokers.find(b => b.id === selectedBroker);
     const brokerName = broker?.broker_name || 'demo';
     const isDemo = brokerName === 'demo';
@@ -112,7 +133,7 @@ const Trade = () => {
     if (!isDemo && selectedBroker) {
       await supabase.from('broker_orders').insert({
         user_id: user.id, broker_id: selectedBroker, symbol: upperSymbol,
-        qty: quantity, side, price: livePrice?.price || 0, status: 'filled',
+        qty: quantity, side, price: executionPrice, status: 'filled',
       } as any);
     }
 
@@ -121,7 +142,7 @@ const Trade = () => {
       const newQty = side === 'BUY' ? existing.qty + quantity : existing.qty - quantity;
       await supabase.from('positions').update({ qty: newQty }).eq('id', existing.id);
     } else {
-      await supabase.from('positions').insert({ user_id: user.id, symbol: upperSymbol, qty: side === 'BUY' ? quantity : -quantity, avg_price: livePrice?.price || Math.random() * 1000 });
+      await supabase.from('positions').insert({ user_id: user.id, symbol: upperSymbol, qty: side === 'BUY' ? quantity : -quantity, avg_price: executionPrice });
     }
 
     await supabase.from('alerts').insert({ user_id: user.id, message: `Trade executed: ${side} ${quantity} ${upperSymbol}`, type: 'success' });
@@ -216,7 +237,7 @@ const Trade = () => {
           <CardContent className="pt-6 flex items-center gap-4">
             <span className={`px-3 py-1 rounded-full text-sm font-semibold ${signalColor[lastSignal.signal_type] || ''}`}>{lastSignal.signal_type}</span>
             <span className="font-mono font-semibold">{lastSignal.symbol}</span>
-            <span className="text-muted-foreground text-sm">Qty: {lastSignal.price}</span>
+            <span className="text-muted-foreground text-sm">Price: {getCurrencySymbol(lastSignal.symbol)}{Number(lastSignal.price).toFixed(2)}</span>
             <span className="text-xs text-muted-foreground font-mono ml-auto">{new Date(lastSignal.created_at).toLocaleString()}</span>
           </CardContent>
         </Card>

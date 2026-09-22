@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { toast } from 'sonner';
 import { Loader2, Download, BarChart3 } from 'lucide-react';
-import { ALL_SYMBOLS, getCurrencySymbol } from '@/lib/marketData';
+import { ALL_SYMBOLS, getCurrencySymbol, fetchCandleData, computeRSI } from '@/lib/marketData';
 
 interface Trade {
   date: string; exitDate: string; symbol: string; side: string;
@@ -38,47 +38,91 @@ const Backtest = () => {
     supabase.from('strategies').select('name').eq('user_id', user.id).then(({ data }) => setStrategies(data || []));
   }, [user]);
 
-  const runBacktest = () => {
-    setRunning(true);
-    const cap = Number(capital);
-    const numTrades = 20 + Math.floor(Math.random() * 21);
-    const startMs = new Date(startDate).getTime();
-    const endMs = new Date(endDate).getTime();
-    const range = endMs - startMs;
-    const mockTrades: Trade[] = [];
-    let balance = cap;
-    const curve: { date: string; value: number }[] = [{ date: startDate, value: cap }];
-    let maxBal = cap; let maxDD = 0;
+  // Runs a simple RSI(14) mean-reversion strategy (enter on oversold <30, exit on
+  // overbought >70 or after a max hold period) against real historical daily
+  // candles for the selected symbol — not simulated/random data.
+  const MAX_HOLD_DAYS = 15;
 
-    for (let i = 0; i < numTrades; i++) {
-      const entryMs = startMs + Math.random() * range * 0.9;
-      const exitMs = entryMs + (1 + Math.random() * 10) * 86400000;
-      const entryPrice = 500 + Math.random() * 3000;
-      const pnlPct = (Math.random() - 0.4) * 10;
-      const exitPrice = entryPrice * (1 + pnlPct / 100);
-      const qty = Math.max(1, Math.floor((cap * 0.1) / entryPrice));
-      const pnl = (exitPrice - entryPrice) * qty;
-      balance += pnl;
-      if (balance > maxBal) maxBal = balance;
-      const dd = ((maxBal - balance) / maxBal) * 100;
-      if (dd > maxDD) maxDD = dd;
-      const d = new Date(entryMs).toISOString().split('T')[0];
-      curve.push({ date: d, value: Math.round(balance) });
-      mockTrades.push({ date: d, exitDate: new Date(exitMs).toISOString().split('T')[0], symbol, side: Math.random() > 0.5 ? 'BUY' : 'SELL', entryPrice, exitPrice, qty, pnl, pnlPct, duration: Math.round((exitMs - entryMs) / 86400000) });
+  const runBacktest = async () => {
+    setRunning(true);
+    try {
+      const cap = Number(capital);
+      const days = Math.max(1, Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000));
+      const range = days <= 30 ? '3mo' : days <= 90 ? '6mo' : days <= 200 ? '1y' : days <= 400 ? '2y' : days <= 900 ? '5y' : '10y';
+      const candles = await fetchCandleData(symbol, '1d', range, true);
+      const inRange = candles.filter(c => c.date >= startDate && c.date <= endDate);
+
+      if (inRange.length < 20) {
+        toast.error('Not enough historical data for this symbol/date range');
+        setTrades([]); setEquityCurve([]);
+        setMetrics({ totalReturn: 0, maxDrawdown: 0, winRate: 0, totalTrades: 0, sharpe: 0 });
+        return;
+      }
+
+      const rsi = computeRSI(inRange, 14);
+      const realTrades: Trade[] = [];
+      let balance = cap;
+      let maxBal = cap, maxDD = 0;
+      const curve: { date: string; value: number }[] = [];
+      let position: { entryIdx: number; entryPrice: number; qty: number } | null = null;
+
+      for (let i = 0; i < inRange.length; i++) {
+        const r = rsi[i];
+        if (!position && r !== null && r < 30) {
+          const entryPrice = inRange[i].close;
+          const qty = Math.max(1, Math.floor((cap * 0.1) / entryPrice));
+          position = { entryIdx: i, entryPrice, qty };
+        } else if (position) {
+          const heldDays = i - position.entryIdx;
+          const isLast = i === inRange.length - 1;
+          if ((r !== null && r > 70) || heldDays >= MAX_HOLD_DAYS || isLast) {
+            const exitPrice = inRange[i].close;
+            const pnl = (exitPrice - position.entryPrice) * position.qty;
+            balance += pnl;
+            realTrades.push({
+              date: inRange[position.entryIdx].date,
+              exitDate: inRange[i].date,
+              symbol,
+              side: 'BUY',
+              entryPrice: position.entryPrice,
+              exitPrice,
+              qty: position.qty,
+              pnl,
+              pnlPct: (pnl / (position.entryPrice * position.qty)) * 100,
+              duration: heldDays,
+            });
+            position = null;
+          }
+        }
+        if (balance > maxBal) maxBal = balance;
+        const dd = ((maxBal - balance) / maxBal) * 100;
+        if (dd > maxDD) maxDD = dd;
+        curve.push({ date: inRange[i].date, value: Math.round(balance) });
+      }
+
+      const wins = realTrades.filter(t => t.pnl > 0).length;
+      const returns = realTrades.map(t => t.pnlPct);
+      const meanReturn = returns.length ? returns.reduce((s, v) => s + v, 0) / returns.length : 0;
+      const stdReturn = returns.length > 1
+        ? Math.sqrt(returns.reduce((s, v) => s + (v - meanReturn) ** 2, 0) / (returns.length - 1))
+        : 0;
+      const sharpe = stdReturn > 0 ? (meanReturn / stdReturn) * Math.sqrt(252) : 0;
+
+      setTrades(realTrades);
+      setEquityCurve(curve);
+      setMetrics({
+        totalReturn: ((balance - cap) / cap) * 100,
+        maxDrawdown: maxDD,
+        winRate: realTrades.length ? (wins / realTrades.length) * 100 : 0,
+        totalTrades: realTrades.length,
+        sharpe,
+      });
+      if (realTrades.length === 0) toast.info('Strategy generated no trades in this date range');
+    } catch (err: any) {
+      toast.error(err.message || 'Backtest failed');
+    } finally {
+      setRunning(false);
     }
-    mockTrades.sort((a, b) => a.date.localeCompare(b.date));
-    curve.sort((a, b) => a.date.localeCompare(b.date));
-    const wins = mockTrades.filter(t => t.pnl > 0).length;
-    setTrades(mockTrades);
-    setEquityCurve(curve);
-    setMetrics({
-      totalReturn: ((balance - cap) / cap) * 100,
-      maxDrawdown: maxDD,
-      winRate: (wins / numTrades) * 100,
-      totalTrades: numTrades,
-      sharpe: 0.8 + Math.random() * 1.3,
-    });
-    setRunning(false);
   };
 
   const exportCSV = () => {
@@ -98,7 +142,10 @@ const Backtest = () => {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold flex items-center gap-2"><BarChart3 className="h-6 w-6 text-primary" /> Backtest Engine</h1>
+      <div>
+        <h1 className="text-2xl font-bold flex items-center gap-2"><BarChart3 className="h-6 w-6 text-primary" /> Backtest Engine</h1>
+        <p className="text-xs text-muted-foreground mt-1">Runs a fixed RSI(14) mean-reversion strategy (buy oversold &lt;30, sell overbought &gt;70 or after {MAX_HOLD_DAYS}d) against real historical daily prices. The Strategy field below is a label for your saved-strategy dropdown only — it doesn't yet change the rules run.</p>
+      </div>
       <Card className="card-glow">
         <CardContent className="pt-6">
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 items-end">

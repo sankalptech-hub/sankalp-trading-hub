@@ -20,7 +20,7 @@ const Positions = () => {
   };
 
   const filtered = positions.filter(r => r.symbol.toLowerCase().includes(q.toLowerCase()));
-  const totalValue = filtered.reduce((s, r) => s + Number(r.base_currency_value || 0), 0);
+  const totalValue = positions.reduce((s, r) => s + Number(r.base_currency_value || 0), 0);
 
   return (
     <div className="p-6 space-y-6">

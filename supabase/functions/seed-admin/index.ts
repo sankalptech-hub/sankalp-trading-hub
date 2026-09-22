@@ -15,21 +15,24 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    // Require a valid service-role or admin JWT to invoke this function
+    // Require either the service-role key, or a one-time setup token known only
+    // to whoever configured this deployment (ADMIN_SEED_TOKEN secret). The anon
+    // key is public (shipped in every client bundle), so it must never grant
+    // access here, and being merely logged in as any app user must not either —
+    // this endpoint creates the first admin account.
     const authHeader = req.headers.get("authorization") ?? "";
     const token = authHeader.replace("Bearer ", "");
-    if (!token || (token !== serviceRoleKey && token !== Deno.env.get("SUPABASE_ANON_KEY"))) {
-      // Verify caller is authenticated
-      const verifyClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
-        global: { headers: { Authorization: authHeader } },
+    const seedToken = req.headers.get("x-seed-token") ?? "";
+    const requiredSeedToken = Deno.env.get("ADMIN_SEED_TOKEN");
+
+    const isServiceRole = !!token && token === serviceRoleKey;
+    const isValidSeedToken = !!requiredSeedToken && seedToken === requiredSeedToken;
+
+    if (!isServiceRole && !isValidSeedToken) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
-      const { data: { user }, error: authErr } = await verifyClient.auth.getUser();
-      if (authErr || !user) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
     }
 
     const supabase = createClient(supabaseUrl, serviceRoleKey, {
