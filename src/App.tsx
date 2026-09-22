@@ -30,6 +30,7 @@ import BuildTracker from "./pages/BuildTracker";
 import Settings from "./pages/Settings";
 import AdminPanel from "./pages/AdminPanel";
 import AssetAnalysis from "./pages/AssetAnalysis";
+import StockProfile from "./pages/StockProfile";
 import EAs from "./pages/EAs";
 import EADetail from "./pages/EADetail";
 import Positions from "./pages/Positions";
@@ -80,6 +81,7 @@ const App = () => {
                 <Route path="/history" element={<History />} />
                 <Route path="/analytics" element={<Analytics />} />
                 <Route path="/asset-analysis" element={<AssetAnalysis />} />
+                <Route path="/stock-profile" element={<StockProfile />} />
                 <Route path="/eas" element={<EAs />} />
                 <Route path="/eas/:id" element={<EADetail />} />
                 <Route path="/positions" element={<Positions />} />

@@ -431,3 +431,150 @@ export const WATCHLIST_GLOBAL_ETFS = ['SPY', 'QQQ'];
 export const DASHBOARD_WATCHLIST = ['RELIANCE.NS', 'TCS.NS', 'INFY.NS', 'WIPRO.NS', 'HDFCBANK.NS'];
 
 export const FOREX_PAIRS = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CAD', 'AUD/USD', 'USD/INR'];
+
+// ─── Fundamentals ───────────────────────────────────────────────────────────
+
+export interface FundamentalsData {
+  trailingPE: number | null;
+  forwardPE: number | null;
+  priceToBook: number | null;
+  dividendYield: number | null;
+  dividendRate: number | null;
+  payoutRatio: number | null;
+  beta: number | null;
+  marketCap: number | null;
+  trailingEps: number | null;
+  forwardEps: number | null;
+  profitMargins: number | null;
+  operatingMargins: number | null;
+  returnOnEquity: number | null;
+  returnOnAssets: number | null;
+  debtToEquity: number | null;
+  revenueGrowth: number | null;
+  earningsGrowth: number | null;
+  currentRatio: number | null;
+  targetMeanPrice: number | null;
+  targetHighPrice: number | null;
+  targetLowPrice: number | null;
+  recommendationKey: string | null;
+  numberOfAnalystOpinions: number | null;
+  recommendationTrend: { strongBuy: number; buy: number; hold: number; sell: number; strongSell: number } | null;
+  sector: string | null;
+  industry: string | null;
+}
+
+// Fundamentals change slowly (quarterly filings, analyst updates) — cache far
+// longer than live price/candle data.
+const FUNDAMENTALS_CACHE_DURATION = 4 * 60 * 60 * 1000;
+
+function getFundamentalsCacheKey(symbol: string) {
+  return `yf_fund_${symbol.toUpperCase()}`;
+}
+
+export async function fetchFundamentals(symbol: string): Promise<FundamentalsData> {
+  const upper = symbol.toUpperCase();
+  try {
+    const raw = localStorage.getItem(getFundamentalsCacheKey(upper));
+    if (raw) {
+      const { data, timestamp } = JSON.parse(raw);
+      if (Date.now() - timestamp < FUNDAMENTALS_CACHE_DURATION) return data;
+    }
+  } catch {
+    // ignore cache read errors
+  }
+
+  const functionsUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-price`;
+  const anonKey = getAnonKey();
+
+  const resp = await fetch(`${functionsUrl}?symbol=${encodeURIComponent(upper)}&mode=fundamentals`, {
+    headers: { Authorization: `Bearer ${anonKey}`, apikey: anonKey },
+  });
+  const json = await resp.json();
+  if (!resp.ok || json.error) {
+    throw new PriceFetchError(json.error ?? `Request failed (${resp.status})`, upper);
+  }
+
+  const data: FundamentalsData = json;
+  try {
+    localStorage.setItem(getFundamentalsCacheKey(upper), JSON.stringify({ data, timestamp: Date.now() }));
+  } catch {
+    // ignore cache write errors (e.g. private browsing / storage full)
+  }
+  return data;
+}
+
+// ─── Peers ──────────────────────────────────────────────────────────────────
+
+export const SECTOR_PEERS: Record<string, string[]> = {
+  Banking: ['HDFCBANK.NS', 'ICICIBANK.NS', 'SBIN.NS', 'KOTAKBANK.NS', 'AXISBANK.NS'],
+  IT: ['TCS.NS', 'INFY.NS', 'WIPRO.NS', 'HCLTECH.NS', 'TECHM.NS'],
+  Energy: ['RELIANCE.NS', 'ONGC.NS', 'IOC.NS', 'BPCL.NS'],
+  Auto: ['MARUTI.NS', 'TATAMOTORS.NS', 'M&M.NS', 'BAJAJ-AUTO.NS', 'EICHERMOT.NS'],
+  Pharma: ['SUNPHARMA.NS', 'DRREDDY.NS', 'CIPLA.NS', 'DIVISLAB.NS', 'APOLLOHOSP.NS'],
+  FMCG: ['HINDUNILVR.NS', 'ITC.NS', 'NESTLEIND.NS', 'BRITANNIA.NS', 'DABUR.NS'],
+  Metals: ['TATASTEEL.NS', 'JSWSTEEL.NS', 'HINDALCO.NS', 'VEDL.NS'],
+  Telecom: ['BHARTIARTL.NS', 'IDEA.NS'],
+  'Financial Services': ['BAJFINANCE.NS', 'BAJAJFINSV.NS', 'HDFCLIFE.NS', 'SBILIFE.NS'],
+};
+
+// Best-effort mapping from Yahoo's free-text sector/industry strings to our
+// curated peer groups — not exhaustive, just enough to show a handful of
+// relevant large-cap comparisons for the common NSE sectors.
+export function getPeerSymbols(symbol: string, sector: string | null, industry: string | null): string[] {
+  const upper = symbol.toUpperCase();
+  const haystack = `${sector ?? ''} ${industry ?? ''}`.toLowerCase();
+  let peers: string[] = [];
+  if (haystack.includes('bank')) peers = SECTOR_PEERS.Banking;
+  else if (haystack.includes('software') || haystack.includes('information technology') || haystack.includes('it services')) peers = SECTOR_PEERS.IT;
+  else if (haystack.includes('oil') || haystack.includes('energy') || haystack.includes('gas')) peers = SECTOR_PEERS.Energy;
+  else if (haystack.includes('auto')) peers = SECTOR_PEERS.Auto;
+  else if (haystack.includes('pharma') || haystack.includes('healthcare') || haystack.includes('drug')) peers = SECTOR_PEERS.Pharma;
+  else if (haystack.includes('consumer') || haystack.includes('fmcg') || haystack.includes('food') || haystack.includes('household')) peers = SECTOR_PEERS.FMCG;
+  else if (haystack.includes('metal') || haystack.includes('steel') || haystack.includes('mining')) peers = SECTOR_PEERS.Metals;
+  else if (haystack.includes('telecom')) peers = SECTOR_PEERS.Telecom;
+  else if (haystack.includes('financial services')) peers = SECTOR_PEERS['Financial Services'];
+  return peers.filter(p => p.toUpperCase() !== upper).slice(0, 5);
+}
+
+// ─── Fear & Greed (our own approximation) ──────────────────────────────────
+
+export interface FearGreedResult {
+  score: number; // 0-100
+  label: 'Extreme Fear' | 'Fear' | 'Neutral' | 'Greed' | 'Extreme Greed';
+  vix: number | null;
+  niftyRsi: number | null;
+  niftyVsSma: number | null; // % Nifty close is above(+)/below(-) its 50-day SMA
+}
+
+// There is no free, official "Fear & Greed Index" for Indian markets (CNN's
+// index is US-only and proprietary). This is our own composite proxy built
+// from real, freely available signals — India VIX level (volatility),
+// Nifty 50's RSI(14) (momentum), and Nifty vs its 50-day SMA (trend) —
+// using the same underlying idea as published fear/greed indices, not a
+// reproduction of any specific one. Label it as an estimate wherever shown.
+export async function fetchFearGreedIndex(): Promise<FearGreedResult> {
+  const [vixData, niftyCandles] = await Promise.all([
+    fetchPrice('^INDIAVIX').catch(() => null),
+    fetchCandleData('^NSEI', '1d', '3mo').catch(() => [] as CandleData[]),
+  ]);
+
+  const vix = vixData?.price ?? null;
+  // NSE VIX typically ranges ~10 (calm) to ~35+ (panic); lower VIX -> more greed.
+  const vixScore = vix !== null ? Math.max(0, Math.min(100, 100 - ((vix - 10) / 25) * 100)) : 50;
+
+  const rsiSeries = niftyCandles.length > 0 ? computeRSI(niftyCandles, 14) : [];
+  const niftyRsi = rsiSeries.filter((v): v is number => v !== null).pop() ?? null;
+  const rsiScore = niftyRsi ?? 50;
+
+  const sma50 = niftyCandles.length > 0 ? computeSMA(niftyCandles, 50) : [];
+  const lastSma = sma50.filter((v): v is number => v !== null).pop() ?? null;
+  const lastClose = niftyCandles.length > 0 ? niftyCandles[niftyCandles.length - 1].close : null;
+  const niftyVsSma = lastSma && lastClose ? ((lastClose - lastSma) / lastSma) * 100 : null;
+  const momentumScore = niftyVsSma !== null ? Math.max(0, Math.min(100, 50 + niftyVsSma * 5)) : 50;
+
+  const score = Math.round((vixScore + rsiScore + momentumScore) / 3);
+  const label: FearGreedResult['label'] =
+    score < 25 ? 'Extreme Fear' : score < 45 ? 'Fear' : score < 55 ? 'Neutral' : score < 75 ? 'Greed' : 'Extreme Greed';
+
+  return { score, label, vix, niftyRsi, niftyVsSma };
+}

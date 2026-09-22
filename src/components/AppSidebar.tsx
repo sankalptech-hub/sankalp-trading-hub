@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, TrendingUp, Radar, Bookmark, Wrench, BarChart3, Layers, Clock,
   PieChart, Shield, Plug, Bell, Bot, ListChecks, Settings, LogOut,
-  ShieldCheck, Sun, Moon, Activity, Cpu, Briefcase, Filter, Globe, Award, Banknote,
+  ShieldCheck, Sun, Moon, Activity, Cpu, Briefcase, Filter, Globe, Award, Banknote, Info,
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { MarketStatusHeader } from '@/components/MarketStatusHeader';
@@ -36,6 +36,7 @@ const portfolioItems = [
   { title: 'History', url: '/history', icon: Clock },
   { title: 'Analytics', url: '/analytics', icon: PieChart },
   { title: 'Asset Analysis', url: '/asset-analysis', icon: Activity },
+  { title: 'Stock Profile', url: '/stock-profile', icon: Info },
   { title: 'Market Analysis', url: '/market-analysis', icon: Globe },
   { title: 'Money Flow', url: '/money-flow', icon: Banknote },
   { title: 'Risk', url: '/risk', icon: Shield },
