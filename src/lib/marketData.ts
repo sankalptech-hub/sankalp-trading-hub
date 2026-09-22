@@ -1,14 +1,15 @@
 import { groww, toGrowwSymbol } from '@/lib/growwService';
 
-// Supabase's edge-function gateway rejects the Authorization header outright
-// (sb-error-code: UNAUTHORIZED_INVALID_JWT_FORMAT) if it isn't an exact,
-// unwrapped JWT — a stray pasted quote or trailing whitespace around the env
-// var value (easy to introduce editing it in a dashboard UI) is enough to
-// break every get-price call while leaving the rest of the app, which uses
-// the key differently, working fine. Sanitize defensively rather than depend
-// on the env var always being pasted in perfectly.
+// Mirrors the same fallback client.ts uses (src/integrations/supabase/client.ts)
+// — this deployment's Vercel project has VITE_SUPABASE_ANON_KEY set, not
+// VITE_SUPABASE_PUBLISHABLE_KEY, so reading only the latter here (as this
+// file previously did) silently produced an empty string: an empty
+// Authorization/apikey header, which Supabase's edge-function gateway
+// rejects as UNAUTHORIZED_INVALID_JWT_FORMAT. Also strips stray wrapping
+// quotes/whitespace defensively in case the value is ever pasted in dirty.
 function getAnonKey(): string {
-  return (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? '').trim().replace(/^['"]|['"]$/g, '');
+  const raw = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || '';
+  return raw.trim().replace(/^['"]|['"]$/g, '');
 }
 
 const CACHE_DURATION = 60000;
