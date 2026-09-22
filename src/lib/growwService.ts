@@ -101,8 +101,8 @@ export function toGrowwSymbol(symbol: string): { tradingSymbol: string; exchange
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export const groww = {
-  connect: (apiKey: string, apiSecret: string) =>
-    callProxy<{ connected: boolean }>('connect', { api_key: apiKey, api_secret: apiSecret }),
+  connect: (apiKey: string, totpSecret: string) =>
+    callProxy<{ connected: boolean }>('connect', { api_key: apiKey, totp_secret: totpSecret }),
 
   disconnect: () => callProxy<{ connected: boolean }>('disconnect'),
 

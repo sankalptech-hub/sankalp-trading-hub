@@ -1,10 +1,13 @@
 // Supabase Edge Function: groww-proxy
 //
 // Server-side proxy for the Groww Trading API (https://groww.in/trade-api/docs).
-// The user's Groww API key/secret NEVER reach the browser: they're posted here
-// once (action=connect), stored in public.broker_secrets (service-role only,
-// no client RLS access), and every subsequent action re-derives a fresh access
-// token server-side from the stored secret.
+// The user's Groww API key/TOTP secret NEVER reach the browser: they're posted
+// here once (action=connect), stored in public.broker_secrets (service-role
+// only, no client RLS access), and every subsequent action re-derives a fresh
+// access token server-side by computing a live TOTP code from the stored
+// secret (confirmed against Groww's real API-key dashboard: it issues an
+// "API Key" + "TOTP Secret" pair for the key_type=totp flow — there is no
+// key+secret+checksum "approval" flow exposed there).
 //
 // IMPORTANT: the exact shape of the POST /v1/token/api/access response wasn't
 // fully pinned down from Groww's docs at implementation time (conflicting
@@ -12,6 +15,13 @@
 // extractAccessToken() below checks all the plausible shapes and throws with the
 // raw body if none match, so a schema mismatch fails loudly on `connect` (which
 // is a live test against the real endpoint) instead of silently breaking later.
+//
+// KNOWN GAP: SEBI requires a static IP registered against the API key for
+// order placement (mandatory per Groww's dashboard). Supabase edge functions
+// do not have a static outbound IP, so place_order/cancel_order will likely
+// be rejected until requests are routed through something with a fixed IP.
+// See the repo/chat history for the pending decision on how to solve this —
+// don't rely on place_order/cancel_order working in production yet.
 
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -22,7 +32,6 @@ const corsHeaders = {
 };
 
 const GROWW_BASE = "https://api.groww.in/v1";
-const TOKEN_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // conservative fallback if Groww gives no expiry we can parse
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -31,10 +40,53 @@ function json(body: unknown, status = 200) {
   });
 }
 
-async function sha256Hex(input: string): Promise<string> {
-  const data = new TextEncoder().encode(input);
-  const buf = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+// Standard TOTP (RFC 6238): base32-decode the secret, HMAC-SHA1 over the
+// 30-second time-step counter, dynamic-truncate to a 6-digit code — the same
+// algorithm Google Authenticator etc. use, which is what Groww's TOTP API
+// keys are built on.
+function base32Decode(input: string): Uint8Array {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const clean = input.toUpperCase().replace(/=+$/, "").replace(/\s/g, "");
+  let bits = "";
+  for (const c of clean) {
+    const val = alphabet.indexOf(c);
+    if (val === -1) throw new Error("Invalid character in TOTP secret (expected base32)");
+    bits += val.toString(2).padStart(5, "0");
+  }
+  const bytes: number[] = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  return new Uint8Array(bytes);
+}
+
+async function generateTotp(base32Secret: string): Promise<string> {
+  const key = base32Decode(base32Secret);
+  const counter = Math.floor(Date.now() / 1000 / 30);
+  const counterBytes = new Uint8Array(8);
+  let temp = counter;
+  for (let i = 7; i >= 0; i--) {
+    counterBytes[i] = temp & 0xff;
+    temp = Math.floor(temp / 256);
+  }
+  const cryptoKey = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const hmac = new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, counterBytes));
+  const offset = hmac[hmac.length - 1] & 0xf;
+  const binCode =
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  return (binCode % 1_000_000).toString().padStart(6, "0");
+}
+
+// Groww's dashboard shows tokens as "Expires 6 AM tomorrow" — a fixed daily
+// cutoff rather than a rolling TTL. Used as the fallback cache expiry when
+// Groww's response doesn't include a parseable expiry field.
+function nextSixAmIstIso(): string {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(Date.now() + IST_OFFSET_MS);
+  const cutoff = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate(), 6, 0, 0));
+  if (istNow.getUTCHours() >= 6) cutoff.setUTCDate(cutoff.getUTCDate() + 1);
+  return new Date(cutoff.getTime() - IST_OFFSET_MS).toISOString();
 }
 
 function extractAccessToken(body: any): { token: string; expiresAt: string | null } {
@@ -51,13 +103,12 @@ function extractAccessToken(body: any): { token: string; expiresAt: string | nul
   return { token, expiresAt: expiry };
 }
 
-async function fetchFreshAccessToken(apiKey: string, apiSecret: string) {
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const checksum = await sha256Hex(apiSecret + timestamp);
+async function fetchFreshAccessToken(apiKey: string, totpSecret: string) {
+  const totp = await generateTotp(totpSecret);
   const res = await fetch(`${GROWW_BASE}/token/api/access`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ key_type: "approval", checksum, timestamp }),
+    body: JSON.stringify({ key_type: "totp", totp }),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body?.status === "FAILURE") {
@@ -107,11 +158,11 @@ async function getAccessTokenForUser(admin: ReturnType<typeof createClient>, use
     if (expiresAt - now > 60_000) return secretRow.cached_access_token as string;
   }
 
-  const { api_key, api_secret } = secretRow.secret_json as { api_key: string; api_secret: string };
-  const { token, expiresAt } = await fetchFreshAccessToken(api_key, api_secret);
+  const { api_key, totp_secret } = secretRow.secret_json as { api_key: string; totp_secret: string };
+  const { token, expiresAt } = await fetchFreshAccessToken(api_key, totp_secret);
   const cachedExpiresAt = expiresAt && !Number.isNaN(Date.parse(expiresAt))
     ? new Date(expiresAt).toISOString()
-    : new Date(now + TOKEN_CACHE_TTL_MS).toISOString();
+    : nextSixAmIstIso();
 
   await admin
     .from("broker_secrets")
@@ -144,25 +195,25 @@ serve(async (req) => {
 
     if (action === "connect") {
       const apiKey = payload?.api_key?.trim();
-      const apiSecret = payload?.api_secret?.trim();
-      if (!apiKey || !apiSecret) return json({ error: "API Key and API Secret are required" }, 400);
+      const totpSecret = payload?.totp_secret?.trim();
+      if (!apiKey || !totpSecret) return json({ error: "API Key and TOTP Secret are required" }, 400);
 
       // Live test against the real endpoint before persisting anything.
       let token: string, expiresAt: string | null;
       try {
-        ({ token, expiresAt } = await fetchFreshAccessToken(apiKey, apiSecret));
+        ({ token, expiresAt } = await fetchFreshAccessToken(apiKey, totpSecret));
       } catch (e) {
         return json({ error: `Could not authenticate with Groww: ${e instanceof Error ? e.message : e}` }, 400);
       }
 
       const cachedExpiresAt = expiresAt && !Number.isNaN(Date.parse(expiresAt))
         ? new Date(expiresAt).toISOString()
-        : new Date(Date.now() + TOKEN_CACHE_TTL_MS).toISOString();
+        : nextSixAmIstIso();
 
       const { error: upsertErr } = await admin.from("broker_secrets").upsert({
         user_id: user.id,
         broker_name: "groww",
-        secret_json: { api_key: apiKey, api_secret: apiSecret },
+        secret_json: { api_key: apiKey, totp_secret: totpSecret },
         cached_access_token: token,
         cached_token_expires_at: cachedExpiresAt,
       }, { onConflict: "user_id,broker_name" });

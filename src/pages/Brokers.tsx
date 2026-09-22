@@ -35,7 +35,7 @@ interface BrokerTemplate {
 const BROKER_TEMPLATES: BrokerTemplate[] = [
   // INDIA
   { broker_name: 'zerodha', display_name: 'Zerodha (Kite Connect)', markets: 'NSE, BSE', fields: ['API Key', 'API Secret', 'Client ID', 'Access Token'], note: '', region: 'INDIA', flag: '🇮🇳', badge: 'Recommended for India', badgeColor: 'bg-emerald-500/20 text-emerald-400', color: 'bg-orange-500' },
-  { broker_name: 'groww', display_name: 'Groww', markets: 'NSE, BSE', fields: ['API Key', 'API Secret'], note: "Requires an active Groww Trading API subscription (₹499+tax/month). Generate a key+secret at groww.in/trade-api/api-keys. This connects real orders — real money moves once you switch to Live.", region: 'INDIA', flag: '🇮🇳', badge: 'Zero AMC', badgeColor: 'bg-teal-500/20 text-teal-400', color: 'bg-[#00D09C]' },
+  { broker_name: 'groww', display_name: 'Groww', markets: 'NSE, BSE', fields: ['API Key', 'TOTP Secret'], note: "Requires an active Groww Trading API subscription (₹499+tax/month). Generate a TOTP-type API key at groww.in → API Keys → Generate API key → Generate TOTP token. This connects real orders — real money moves once you switch to Live.", region: 'INDIA', flag: '🇮🇳', badge: 'Zero AMC', badgeColor: 'bg-teal-500/20 text-teal-400', color: 'bg-[#00D09C]' },
   // GLOBAL
   { broker_name: 'alpaca', display_name: 'Alpaca', markets: 'US Stocks, ETFs, Crypto', fields: ['API Key ID', 'API Secret Key'], note: 'Zero commission US stocks & ETFs. Paper trading available.', isAlpaca: true, region: 'GLOBAL', flag: '🇺🇸', badge: 'Best for Global', badgeColor: 'bg-yellow-500/20 text-yellow-400', color: 'bg-[#FFCD00]', extras: ['Environment'] },
   { broker_name: 'ibkr', display_name: 'Interactive Brokers', markets: '150+ global exchanges', fields: ['Account ID', 'TWS Port', 'Client ID'], note: 'Requires TWS or IB Gateway running on your computer. Best for professional traders.', region: 'GLOBAL', flag: '🌍', badge: 'Professional Grade', badgeColor: 'bg-red-500/20 text-red-400', color: 'bg-red-600', extras: ['Paper Trading'], comingSoon: true },
@@ -144,11 +144,11 @@ const Brokers = () => {
     if (!user || !modalBroker) return;
     const errors: Record<string, string> = {};
     if (!fields['API Key']?.trim()) errors['API Key'] = 'Required';
-    if (!fields['API Secret']?.trim()) errors['API Secret'] = 'Required';
+    if (!fields['TOTP Secret']?.trim()) errors['TOTP Secret'] = 'Required';
     if (Object.keys(errors).length > 0) { setFieldErrors(errors); return; }
 
     setGrowwConnecting(true);
-    const res = await groww.connect(fields['API Key'].trim(), fields['API Secret'].trim());
+    const res = await groww.connect(fields['API Key'].trim(), fields['TOTP Secret'].trim());
     setGrowwConnecting(false);
     if (res.error) { toast.error(`Groww connection failed: ${res.error}`); return; }
 
@@ -270,9 +270,12 @@ const Brokers = () => {
         <AlertTriangle className="h-4 w-4 flex-shrink-0" /> This connects your real Groww account. Once connected and switched to Live mode, orders placed from the Trade page execute with real money.
       </div>
       <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-400">
-        Requires an active Groww Trading API subscription (₹499+tax/month). Generate an API Key + Secret at <span className="font-semibold">groww.in/trade-api/api-keys</span>. Credentials are sent straight to a server-side function and are never stored in your browser or visible to other users.
+        Requires an active Groww Trading API subscription (₹499+tax/month). On groww.in → API Keys, click <span className="font-semibold">Generate API key → Generate TOTP token</span> (not "Generate Access Token" — that one expires daily and can't be used here). Credentials are sent straight to a server-side function and are never stored in your browser.
       </div>
-      {['API Key', 'API Secret'].map(f => (
+      <div className="p-3 bg-orange-500/10 border border-orange-500/20 rounded text-xs text-orange-400">
+        SEBI requires a static IP registered against your API key before it can place orders (deadline was 31 Mar 2026). That isn't wired up yet — order placement may be rejected by Groww until it is. Holdings/positions/funds/quotes work regardless.
+      </div>
+      {['API Key', 'TOTP Secret'].map(f => (
         <div key={f}>
           <Label>{f} *</Label>
           <div className="relative">
