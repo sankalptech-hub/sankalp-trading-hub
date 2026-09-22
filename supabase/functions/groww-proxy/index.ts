@@ -16,12 +16,11 @@
 // raw body if none match, so a schema mismatch fails loudly on `connect` (which
 // is a live test against the real endpoint) instead of silently breaking later.
 //
-// KNOWN GAP: SEBI requires a static IP registered against the API key for
-// order placement (mandatory per Groww's dashboard). Supabase edge functions
-// do not have a static outbound IP, so place_order/cancel_order will likely
-// be rejected until requests are routed through something with a fixed IP.
-// See the repo/chat history for the pending decision on how to solve this —
-// don't rely on place_order/cancel_order working in production yet.
+// STATIC IP: SEBI requires order-placement calls to originate from a static
+// IP registered against the API key. Supabase edge functions don't have one,
+// so every Groww API call here routes through a small relay (see
+// GROWW_RELAY_URL/GROWW_RELAY_SECRET below) running on a VPS with a fixed IP
+// that's registered on Groww's API-key dashboard.
 
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -31,7 +30,17 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const GROWW_BASE = "https://api.groww.in/v1";
+// SEBI requires order-placement calls to originate from a static IP
+// registered against the API key. Supabase edge functions don't have one, so
+// when GROWW_RELAY_URL/GROWW_RELAY_SECRET are configured (Supabase secrets),
+// every Groww API call is routed through a small relay running on a VPS with
+// a static IP (see supabase/functions/groww-proxy — repo docs / chat history
+// for the relay's own source). Falls back to calling Groww directly if the
+// relay isn't configured yet.
+const RELAY_URL = Deno.env.get("GROWW_RELAY_URL"); // e.g. https://groww-relay.sankalp-tech.com
+const RELAY_SECRET = Deno.env.get("GROWW_RELAY_SECRET");
+const GROWW_BASE = RELAY_URL ? `${RELAY_URL}/v1` : "https://api.groww.in/v1";
+const RELAY_HEADERS = RELAY_SECRET ? { "X-Relay-Secret": RELAY_SECRET } : {};
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -107,7 +116,7 @@ async function fetchFreshAccessToken(apiKey: string, totpSecret: string) {
   const totp = await generateTotp(totpSecret);
   const res = await fetch(`${GROWW_BASE}/token/api/access`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...RELAY_HEADERS },
     body: JSON.stringify({ key_type: "totp", totp }),
   });
   const body = await res.json().catch(() => ({}));
@@ -125,6 +134,7 @@ async function growwFetch(accessToken: string, path: string, init: RequestInit =
       "X-API-VERSION": "1.0",
       Authorization: `Bearer ${accessToken}`,
       ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...RELAY_HEADERS,
       ...init.headers,
     },
   });
