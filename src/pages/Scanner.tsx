@@ -15,35 +15,19 @@ import { Loader2, Radar, Bookmark, Zap, Gauge, Landmark, Brain } from 'lucide-re
 import {
   fetchPrice, fetchCandleData, computeRSI, computeATR, getCurrencySymbol,
   WATCHLIST_NSE_MAIN, WATCHLIST_NSE_TECH, WATCHLIST_US_TECH, WATCHLIST_US_FINANCE, WATCHLIST_CANADA_TSX, WATCHLIST_UK_LSE, WATCHLIST_GLOBAL_ETFS,
-  SCAN_UNIVERSE_NSE, detectBreakout, computeScalpScore, detectBigMoney, detectSmartMoney,
-  BreakoutSignal, ScalpScore, BigMoneySignal, SmartMoneySignal, CandleData,
+  SCAN_UNIVERSE_NSE,
+  BreakoutSignal, ScalpScore, BigMoneySignal, SmartMoneySignal,
 } from '@/lib/marketData';
 import { EXCHANGES, getExchangeForSymbol } from '@/lib/marketHours';
 
-// Runs `fn` over `items` with at most `limit` in flight at once — avoids
-// hammering the price/candle API with 45+ simultaneous requests.
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
-interface StrategyRow {
+interface DbScanRow {
+  id: string;
   symbol: string;
+  category: 'breakout' | 'scalp' | 'big_money' | 'smart_money';
   price: number;
-  changePercent: number;
-  currency: string;
-  breakout: BreakoutSignal | null;
-  scalp: ScalpScore | null;
-  bigMoney: BigMoneySignal | null;
-  smartMoney: SmartMoneySignal | null;
+  change_percent: number;
+  metrics: BreakoutSignal | ScalpScore | BigMoneySignal | SmartMoneySignal;
+  computed_at: string;
 }
 
 interface ScanResult {
@@ -81,52 +65,40 @@ const Scanner = () => {
   const [showSaveWl, setShowSaveWl] = useState(false);
   const [saveWlName, setSaveWlName] = useState('');
 
-  const [strategyRows, setStrategyRows] = useState<StrategyRow[]>([]);
-  const [strategyScanning, setStrategyScanning] = useState(false);
-  const [strategyProgress, setStrategyProgress] = useState(0);
-  const [strategyLastScanned, setStrategyLastScanned] = useState<Date | null>(null);
-  const [strategyScanTime, setStrategyScanTime] = useState(0);
+  // Strategy Scan results are computed server-side on a schedule (pg_cron ->
+  // strategy-scanner edge function, every 15min during market hours) and
+  // just read here — the page never runs the scan itself. "Refresh now"
+  // triggers an out-of-schedule run when someone wants fresher data
+  // immediately.
+  const [dbScanRows, setDbScanRows] = useState<DbScanRow[]>([]);
+  const [loadingScanRows, setLoadingScanRows] = useState(true);
+  const [triggeringScan, setTriggeringScan] = useState(false);
 
-  const runStrategyScan = async () => {
-    setStrategyScanning(true);
-    setStrategyProgress(0);
-    const start = Date.now();
-    const universe = SCAN_UNIVERSE_NSE;
-    let done = 0;
-
-    const rows = await mapLimit(universe, 6, async (sym): Promise<StrategyRow | null> => {
-      try {
-        const candles: CandleData[] = await fetchCandleData(sym, '1d', '3mo');
-        done++; setStrategyProgress(done);
-        if (candles.length < 11) return null;
-        const today = candles[candles.length - 1];
-        const prevClose = candles[candles.length - 2]?.close ?? today.close;
-        return {
-          symbol: sym,
-          price: today.close,
-          changePercent: prevClose ? ((today.close - prevClose) / prevClose) * 100 : 0,
-          currency: getCurrencySymbol(sym),
-          breakout: detectBreakout(candles),
-          scalp: computeScalpScore(candles),
-          bigMoney: detectBigMoney(candles),
-          smartMoney: detectSmartMoney(candles),
-        };
-      } catch {
-        done++; setStrategyProgress(done);
-        return null;
-      }
-    });
-
-    setStrategyRows(rows.filter((r): r is StrategyRow => r !== null));
-    setStrategyLastScanned(new Date());
-    setStrategyScanTime((Date.now() - start) / 1000);
-    setStrategyScanning(false);
+  const loadStrategyResults = async () => {
+    setLoadingScanRows(true);
+    const { data, error } = await supabase.from('strategy_scan_results').select('*').order('computed_at', { ascending: false });
+    if (error) toast.error('Failed to load scan results: ' + error.message);
+    setDbScanRows((data as DbScanRow[]) || []);
+    setLoadingScanRows(false);
   };
 
-  const breakoutResults = strategyRows.filter(r => r.breakout).sort((a, b) => (b.breakout!.volumeRatio) - (a.breakout!.volumeRatio));
-  const scalpResults = [...strategyRows].filter(r => r.scalp).sort((a, b) => b.scalp!.score - a.scalp!.score).slice(0, 15);
-  const bigMoneyResults = strategyRows.filter(r => r.bigMoney).sort((a, b) => b.bigMoney!.turnoverRatio - a.bigMoney!.turnoverRatio);
-  const smartMoneyResults = strategyRows.filter(r => r.smartMoney).sort((a, b) => b.smartMoney!.volumeRatio - a.smartMoney!.volumeRatio);
+  useEffect(() => { loadStrategyResults(); }, []);
+
+  const triggerManualScan = async () => {
+    setTriggeringScan(true);
+    const { error } = await supabase.functions.invoke('strategy-scanner');
+    if (error) toast.error('Scan failed: ' + error.message);
+    else toast.success('Scan complete');
+    await loadStrategyResults();
+    setTriggeringScan(false);
+  };
+
+  const strategyLastScanned = dbScanRows[0]?.computed_at ? new Date(dbScanRows[0].computed_at) : null;
+  const byCategory = (cat: DbScanRow['category']) => dbScanRows.filter(r => r.category === cat);
+  const breakoutResults = byCategory('breakout').sort((a, b) => (b.metrics as BreakoutSignal).volumeRatio - (a.metrics as BreakoutSignal).volumeRatio);
+  const scalpResults = byCategory('scalp').sort((a, b) => (b.metrics as ScalpScore).score - (a.metrics as ScalpScore).score).slice(0, 15);
+  const bigMoneyResults = byCategory('big_money').sort((a, b) => (b.metrics as BigMoneySignal).turnoverRatio - (a.metrics as BigMoneySignal).turnoverRatio);
+  const smartMoneyResults = byCategory('smart_money').sort((a, b) => (b.metrics as SmartMoneySignal).volumeRatio - (a.metrics as SmartMoneySignal).volumeRatio);
 
   useEffect(() => {
     if (!user) return;
@@ -329,25 +301,27 @@ const Scanner = () => {
           <Card className="card-glow">
             <CardContent className="pt-6">
               <div className="flex flex-wrap gap-4 items-center">
-                <Button onClick={runStrategyScan} disabled={strategyScanning}>
-                  {strategyScanning
-                    ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Scanning {strategyProgress}/{SCAN_UNIVERSE_NSE.length}...</>
-                    : `Scan ${SCAN_UNIVERSE_NSE.length} NSE large/mid-caps`}
+                <Button variant="outline" onClick={triggerManualScan} disabled={triggeringScan}>
+                  {triggeringScan ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Refreshing...</> : 'Refresh now'}
                 </Button>
-                {strategyLastScanned && (
+                {loadingScanRows ? (
+                  <span className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Loading...</span>
+                ) : strategyLastScanned ? (
                   <span className="text-xs text-muted-foreground">
-                    Last: {strategyLastScanned.toLocaleTimeString()} • {strategyRows.length}/{SCAN_UNIVERSE_NSE.length} symbols loaded in {strategyScanTime.toFixed(1)}s
+                    Background scan last ran: {strategyLastScanned.toLocaleTimeString()} ({strategyLastScanned.toLocaleDateString()})
                   </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">No background scan has run yet — click Refresh now.</span>
                 )}
               </div>
               <p className="text-[10px] text-muted-foreground mt-3">
-                Standard technical-analysis heuristics computed from real price/volume history — not signals from a paid data provider, not financial advice. See each tab's description for the exact rule.
+                Scans {SCAN_UNIVERSE_NSE.length} liquid NSE large/mid-caps automatically every 15 minutes during market hours (9:15am-3:30pm IST, Mon-Fri) — this page just displays the latest results, no need to trigger it yourself. Standard technical-analysis heuristics computed from real price/volume history — not signals from a paid data provider, not financial advice. See each tab's description for the exact rule.
               </p>
             </CardContent>
           </Card>
 
-          {strategyRows.length === 0 ? (
-            <div className="text-center text-muted-foreground py-12">Run a scan to find setups across breakout, scalping, big money and smart money criteria.</div>
+          {dbScanRows.length === 0 && !loadingScanRows ? (
+            <div className="text-center text-muted-foreground py-12">No results yet — click "Refresh now" to run the first scan.</div>
           ) : (
             <Tabs defaultValue="breakout">
               <TabsList>
@@ -365,17 +339,21 @@ const Scanner = () => {
                       <Table>
                         <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change%</TableHead><TableHead>20D Resistance</TableHead><TableHead>% Above</TableHead><TableHead>Vol Ratio</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
                         <TableBody>
-                          {breakoutResults.map(r => (
-                            <TableRow key={r.symbol}>
-                              <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
-                              <TableCell className="font-mono">{r.currency}{r.price.toFixed(2)}</TableCell>
-                              <TableCell className={`font-mono ${r.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.changePercent >= 0 ? '+' : ''}{r.changePercent.toFixed(2)}%</TableCell>
-                              <TableCell className="font-mono text-xs">{r.currency}{r.breakout!.resistance20.toFixed(2)}</TableCell>
-                              <TableCell className="font-mono text-emerald-400">+{r.breakout!.pctAboveResistance.toFixed(2)}%</TableCell>
-                              <TableCell className="font-mono">{r.breakout!.volumeRatio.toFixed(1)}x</TableCell>
-                              <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
-                            </TableRow>
-                          ))}
+                          {breakoutResults.map(r => {
+                            const m = r.metrics as BreakoutSignal;
+                            const cur = getCurrencySymbol(r.symbol);
+                            return (
+                              <TableRow key={r.symbol}>
+                                <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
+                                <TableCell className="font-mono">{cur}{r.price.toFixed(2)}</TableCell>
+                                <TableCell className={`font-mono ${r.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.change_percent >= 0 ? '+' : ''}{r.change_percent.toFixed(2)}%</TableCell>
+                                <TableCell className="font-mono text-xs">{cur}{m.resistance20.toFixed(2)}</TableCell>
+                                <TableCell className="font-mono text-emerald-400">+{m.pctAboveResistance.toFixed(2)}%</TableCell>
+                                <TableCell className="font-mono">{m.volumeRatio.toFixed(1)}x</TableCell>
+                                <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     )}
@@ -391,16 +369,19 @@ const Scanner = () => {
                       <Table>
                         <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>ATR%</TableHead><TableHead>Avg Turnover</TableHead><TableHead>Score</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
                         <TableBody>
-                          {scalpResults.map(r => (
-                            <TableRow key={r.symbol}>
-                              <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
-                              <TableCell className="font-mono">{r.currency}{r.price.toFixed(2)}</TableCell>
-                              <TableCell className="font-mono">{r.scalp!.atrPct.toFixed(2)}%</TableCell>
-                              <TableCell className="font-mono text-xs">₹{r.scalp!.avgTurnoverCr.toFixed(1)}Cr</TableCell>
-                              <TableCell><Badge variant="outline" className={r.scalp!.score >= 70 ? 'text-emerald-400 border-emerald-400/30' : r.scalp!.score >= 40 ? 'text-yellow-400 border-yellow-400/30' : 'text-muted-foreground'}>{r.scalp!.score}</Badge></TableCell>
-                              <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
-                            </TableRow>
-                          ))}
+                          {scalpResults.map(r => {
+                            const m = r.metrics as ScalpScore;
+                            return (
+                              <TableRow key={r.symbol}>
+                                <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
+                                <TableCell className="font-mono">{getCurrencySymbol(r.symbol)}{r.price.toFixed(2)}</TableCell>
+                                <TableCell className="font-mono">{m.atrPct.toFixed(2)}%</TableCell>
+                                <TableCell className="font-mono text-xs">₹{m.avgTurnoverCr.toFixed(1)}Cr</TableCell>
+                                <TableCell><Badge variant="outline" className={m.score >= 70 ? 'text-emerald-400 border-emerald-400/30' : m.score >= 40 ? 'text-yellow-400 border-yellow-400/30' : 'text-muted-foreground'}>{m.score}</Badge></TableCell>
+                                <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     )}
@@ -416,17 +397,20 @@ const Scanner = () => {
                       <Table>
                         <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change%</TableHead><TableHead>Turnover Today</TableHead><TableHead>Avg Turnover</TableHead><TableHead>Ratio</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
                         <TableBody>
-                          {bigMoneyResults.map(r => (
-                            <TableRow key={r.symbol}>
-                              <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
-                              <TableCell className="font-mono">{r.currency}{r.price.toFixed(2)}</TableCell>
-                              <TableCell className={`font-mono ${r.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.changePercent >= 0 ? '+' : ''}{r.changePercent.toFixed(2)}%</TableCell>
-                              <TableCell className="font-mono text-xs">₹{r.bigMoney!.turnoverTodayCr.toFixed(1)}Cr</TableCell>
-                              <TableCell className="font-mono text-xs">₹{r.bigMoney!.avgTurnoverCr.toFixed(1)}Cr</TableCell>
-                              <TableCell className="font-mono text-primary">{r.bigMoney!.turnoverRatio.toFixed(1)}x</TableCell>
-                              <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
-                            </TableRow>
-                          ))}
+                          {bigMoneyResults.map(r => {
+                            const m = r.metrics as BigMoneySignal;
+                            return (
+                              <TableRow key={r.symbol}>
+                                <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
+                                <TableCell className="font-mono">{getCurrencySymbol(r.symbol)}{r.price.toFixed(2)}</TableCell>
+                                <TableCell className={`font-mono ${r.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.change_percent >= 0 ? '+' : ''}{r.change_percent.toFixed(2)}%</TableCell>
+                                <TableCell className="font-mono text-xs">₹{m.turnoverTodayCr.toFixed(1)}Cr</TableCell>
+                                <TableCell className="font-mono text-xs">₹{m.avgTurnoverCr.toFixed(1)}Cr</TableCell>
+                                <TableCell className="font-mono text-primary">{m.turnoverRatio.toFixed(1)}x</TableCell>
+                                <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     )}
@@ -442,16 +426,19 @@ const Scanner = () => {
                       <Table>
                         <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change%</TableHead><TableHead>Vol Ratio</TableHead><TableHead>Direction</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
                         <TableBody>
-                          {smartMoneyResults.map(r => (
-                            <TableRow key={r.symbol}>
-                              <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
-                              <TableCell className="font-mono">{r.currency}{r.price.toFixed(2)}</TableCell>
-                              <TableCell className={`font-mono ${r.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.changePercent >= 0 ? '+' : ''}{r.changePercent.toFixed(2)}%</TableCell>
-                              <TableCell className="font-mono">{r.smartMoney!.volumeRatio.toFixed(1)}x</TableCell>
-                              <TableCell><Badge variant="outline" className={r.smartMoney!.direction === 'Accumulation' ? 'text-emerald-400 border-emerald-400/30' : 'text-red-400 border-red-400/30'}>{r.smartMoney!.direction}</Badge></TableCell>
-                              <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
-                            </TableRow>
-                          ))}
+                          {smartMoneyResults.map(r => {
+                            const m = r.metrics as SmartMoneySignal;
+                            return (
+                              <TableRow key={r.symbol}>
+                                <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
+                                <TableCell className="font-mono">{getCurrencySymbol(r.symbol)}{r.price.toFixed(2)}</TableCell>
+                                <TableCell className={`font-mono ${r.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.change_percent >= 0 ? '+' : ''}{r.change_percent.toFixed(2)}%</TableCell>
+                                <TableCell className="font-mono">{m.volumeRatio.toFixed(1)}x</TableCell>
+                                <TableCell><Badge variant="outline" className={m.direction === 'Accumulation' ? 'text-emerald-400 border-emerald-400/30' : 'text-red-400 border-red-400/30'}>{m.direction}</Badge></TableCell>
+                                <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     )}
