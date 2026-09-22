@@ -4,7 +4,7 @@
 //
 // Query params:
 //   symbol   (required) e.g. RELIANCE.NS, AAPL
-//   mode     "quote" (default) | "candles" | "fundamentals"
+//   mode     "quote" (default) | "candles" | "fundamentals" | "financials"
 //   interval (candles only) default "1d"
 //   range    (candles only) default "1mo"
 //
@@ -61,6 +61,92 @@ serve(async (req) => {
       JSON.stringify({ error: "Missing required 'symbol' query param" }),
       { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
+  }
+
+  if (mode === "financials") {
+    try {
+      const { crumb, cookie } = await getYahooCrumb();
+      const metricKeys = [
+        "TotalRevenue", "GrossProfit", "OperatingIncome", "EBITDA", "NetIncome", "DilutedEPS",
+        "TotalAssets", "TotalLiabilitiesNetMinorityInterest", "StockholdersEquity", "TotalDebt", "CashAndCashEquivalents",
+        "OperatingCashFlow", "InvestingCashFlow", "FinancingCashFlow", "CapitalExpenditure", "FreeCashFlow",
+      ];
+      const types = metricKeys.map((k) => `annual${k}`).join(",");
+      const period1 = Math.floor(Date.now() / 1000) - 20 * 365 * 86400;
+      const period2 = Math.floor(Date.now() / 1000) + 365 * 86400;
+      const res = await fetch(
+        `https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/${encodeURIComponent(symbol.toUpperCase())}?symbol=${encodeURIComponent(symbol.toUpperCase())}&type=${types}&period1=${period1}&period2=${period2}&crumb=${encodeURIComponent(crumb)}`,
+        { headers: { "User-Agent": UA, Cookie: cookie } }
+      );
+      if (!res.ok) {
+        return new Response(
+          JSON.stringify({ error: `Upstream financials source returned ${res.status}`, symbol }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      const json = await res.json();
+      const results: any[] = json?.timeseries?.result ?? [];
+      if (results.length === 0) {
+        return new Response(
+          JSON.stringify({ error: "No financial statement data available", symbol }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const byMetric: Record<string, Record<string, number>> = {};
+      const allDates = new Set<string>();
+      for (const r of results) {
+        const type: string | undefined = r?.meta?.type?.[0];
+        if (!type) continue;
+        const key = type.replace(/^annual/, "");
+        const entries: any[] = (r[type] ?? []).filter(Boolean);
+        const dateMap: Record<string, number> = {};
+        for (const e of entries) {
+          const date = e?.asOfDate;
+          const val = e?.reportedValue?.raw;
+          if (date && typeof val === "number") { dateMap[date] = val; allDates.add(date); }
+        }
+        byMetric[key] = dateMap;
+      }
+      const years = Array.from(allDates).sort();
+      const seriesFor = (key: string) => years.map((y) => byMetric[key]?.[y] ?? null);
+
+      return new Response(
+        JSON.stringify({
+          symbol,
+          years,
+          incomeStatement: {
+            totalRevenue: seriesFor("TotalRevenue"),
+            grossProfit: seriesFor("GrossProfit"),
+            operatingIncome: seriesFor("OperatingIncome"),
+            ebitda: seriesFor("EBITDA"),
+            netIncome: seriesFor("NetIncome"),
+            dilutedEPS: seriesFor("DilutedEPS"),
+          },
+          balanceSheet: {
+            totalAssets: seriesFor("TotalAssets"),
+            totalLiabilities: seriesFor("TotalLiabilitiesNetMinorityInterest"),
+            stockholdersEquity: seriesFor("StockholdersEquity"),
+            totalDebt: seriesFor("TotalDebt"),
+            cashAndEquivalents: seriesFor("CashAndCashEquivalents"),
+          },
+          cashFlow: {
+            operatingCashFlow: seriesFor("OperatingCashFlow"),
+            investingCashFlow: seriesFor("InvestingCashFlow"),
+            financingCashFlow: seriesFor("FinancingCashFlow"),
+            capitalExpenditure: seriesFor("CapitalExpenditure"),
+            freeCashFlow: seriesFor("FreeCashFlow"),
+          },
+          fetchedAt: new Date().toISOString(),
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    } catch (e) {
+      return new Response(
+        JSON.stringify({ error: "Fetch failed", detail: String(e), symbol }),
+        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
   }
 
   if (mode === "fundamentals") {
