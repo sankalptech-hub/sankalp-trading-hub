@@ -1,5 +1,16 @@
 import { groww, toGrowwSymbol } from '@/lib/growwService';
 
+// Supabase's edge-function gateway rejects the Authorization header outright
+// (sb-error-code: UNAUTHORIZED_INVALID_JWT_FORMAT) if it isn't an exact,
+// unwrapped JWT — a stray pasted quote or trailing whitespace around the env
+// var value (easy to introduce editing it in a dashboard UI) is enough to
+// break every get-price call while leaving the rest of the app, which uses
+// the key differently, working fine. Sanitize defensively rather than depend
+// on the env var always being pasted in perfectly.
+function getAnonKey(): string {
+  return (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? '').trim().replace(/^['"]|['"]$/g, '');
+}
+
 const CACHE_DURATION = 60000;
 
 interface CachedPrice {
@@ -106,7 +117,7 @@ async function fetchPriceFromYahoo(upper: string): Promise<CachedPrice> {
   // Call the edge function URL directly with query params (functions.invoke doesn't
   // pass query strings cleanly for GET requests).
   const functionsUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-price`;
-  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  const anonKey = getAnonKey();
 
   try {
     const resp = await fetch(`${functionsUrl}?symbol=${encodeURIComponent(upper)}&mode=quote`, {
@@ -237,7 +248,7 @@ export async function fetchCandleData(
   }
 
   const functionsUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-price`;
-  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  const anonKey = getAnonKey();
 
   try {
     const resp = await fetch(
