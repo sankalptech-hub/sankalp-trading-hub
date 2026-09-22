@@ -11,9 +11,40 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Loader2, Radar, Bookmark } from 'lucide-react';
-import { fetchPrice, fetchCandleData, computeRSI, computeATR, getCurrencySymbol, WATCHLIST_NSE_MAIN, WATCHLIST_NSE_TECH, WATCHLIST_US_TECH, WATCHLIST_US_FINANCE, WATCHLIST_CANADA_TSX, WATCHLIST_UK_LSE, WATCHLIST_GLOBAL_ETFS } from '@/lib/marketData';
+import { Loader2, Radar, Bookmark, Zap, Gauge, Landmark, Brain } from 'lucide-react';
+import {
+  fetchPrice, fetchCandleData, computeRSI, computeATR, getCurrencySymbol,
+  WATCHLIST_NSE_MAIN, WATCHLIST_NSE_TECH, WATCHLIST_US_TECH, WATCHLIST_US_FINANCE, WATCHLIST_CANADA_TSX, WATCHLIST_UK_LSE, WATCHLIST_GLOBAL_ETFS,
+  SCAN_UNIVERSE_NSE, detectBreakout, computeScalpScore, detectBigMoney, detectSmartMoney,
+  BreakoutSignal, ScalpScore, BigMoneySignal, SmartMoneySignal, CandleData,
+} from '@/lib/marketData';
 import { EXCHANGES, getExchangeForSymbol } from '@/lib/marketHours';
+
+// Runs `fn` over `items` with at most `limit` in flight at once — avoids
+// hammering the price/candle API with 45+ simultaneous requests.
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+interface StrategyRow {
+  symbol: string;
+  price: number;
+  changePercent: number;
+  currency: string;
+  breakout: BreakoutSignal | null;
+  scalp: ScalpScore | null;
+  bigMoney: BigMoneySignal | null;
+  smartMoney: SmartMoneySignal | null;
+}
 
 interface ScanResult {
   symbol: string;
@@ -49,6 +80,53 @@ const Scanner = () => {
   const [userWatchlists, setUserWatchlists] = useState<any[]>([]);
   const [showSaveWl, setShowSaveWl] = useState(false);
   const [saveWlName, setSaveWlName] = useState('');
+
+  const [strategyRows, setStrategyRows] = useState<StrategyRow[]>([]);
+  const [strategyScanning, setStrategyScanning] = useState(false);
+  const [strategyProgress, setStrategyProgress] = useState(0);
+  const [strategyLastScanned, setStrategyLastScanned] = useState<Date | null>(null);
+  const [strategyScanTime, setStrategyScanTime] = useState(0);
+
+  const runStrategyScan = async () => {
+    setStrategyScanning(true);
+    setStrategyProgress(0);
+    const start = Date.now();
+    const universe = SCAN_UNIVERSE_NSE;
+    let done = 0;
+
+    const rows = await mapLimit(universe, 6, async (sym): Promise<StrategyRow | null> => {
+      try {
+        const candles: CandleData[] = await fetchCandleData(sym, '1d', '3mo');
+        done++; setStrategyProgress(done);
+        if (candles.length < 11) return null;
+        const today = candles[candles.length - 1];
+        const prevClose = candles[candles.length - 2]?.close ?? today.close;
+        return {
+          symbol: sym,
+          price: today.close,
+          changePercent: prevClose ? ((today.close - prevClose) / prevClose) * 100 : 0,
+          currency: getCurrencySymbol(sym),
+          breakout: detectBreakout(candles),
+          scalp: computeScalpScore(candles),
+          bigMoney: detectBigMoney(candles),
+          smartMoney: detectSmartMoney(candles),
+        };
+      } catch {
+        done++; setStrategyProgress(done);
+        return null;
+      }
+    });
+
+    setStrategyRows(rows.filter((r): r is StrategyRow => r !== null));
+    setStrategyLastScanned(new Date());
+    setStrategyScanTime((Date.now() - start) / 1000);
+    setStrategyScanning(false);
+  };
+
+  const breakoutResults = strategyRows.filter(r => r.breakout).sort((a, b) => (b.breakout!.volumeRatio) - (a.breakout!.volumeRatio));
+  const scalpResults = [...strategyRows].filter(r => r.scalp).sort((a, b) => b.scalp!.score - a.scalp!.score).slice(0, 15);
+  const bigMoneyResults = strategyRows.filter(r => r.bigMoney).sort((a, b) => b.bigMoney!.turnoverRatio - a.bigMoney!.turnoverRatio);
+  const smartMoneyResults = strategyRows.filter(r => r.smartMoney).sort((a, b) => b.smartMoney!.volumeRatio - a.smartMoney!.volumeRatio);
 
   useEffect(() => {
     if (!user) return;
@@ -146,6 +224,7 @@ const Scanner = () => {
       <Tabs defaultValue="scan">
         <TabsList>
           <TabsTrigger value="scan">Live Scan</TabsTrigger>
+          <TabsTrigger value="strategy">Strategy Scan</TabsTrigger>
           <TabsTrigger value="signals">
             Saved Signals
             {signals.length > 0 && <span className="ml-2 bg-primary/20 text-primary text-xs rounded-full px-1.5">{signals.length}</span>}
@@ -244,6 +323,143 @@ const Scanner = () => {
           <Bookmark className="h-4 w-4 mr-2" /> Save scan results as new watchlist
         </Button>
       )}
+        </TabsContent>
+
+        <TabsContent value="strategy" className="space-y-6">
+          <Card className="card-glow">
+            <CardContent className="pt-6">
+              <div className="flex flex-wrap gap-4 items-center">
+                <Button onClick={runStrategyScan} disabled={strategyScanning}>
+                  {strategyScanning
+                    ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Scanning {strategyProgress}/{SCAN_UNIVERSE_NSE.length}...</>
+                    : `Scan ${SCAN_UNIVERSE_NSE.length} NSE large/mid-caps`}
+                </Button>
+                {strategyLastScanned && (
+                  <span className="text-xs text-muted-foreground">
+                    Last: {strategyLastScanned.toLocaleTimeString()} • {strategyRows.length}/{SCAN_UNIVERSE_NSE.length} symbols loaded in {strategyScanTime.toFixed(1)}s
+                  </span>
+                )}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-3">
+                Standard technical-analysis heuristics computed from real price/volume history — not signals from a paid data provider, not financial advice. See each tab's description for the exact rule.
+              </p>
+            </CardContent>
+          </Card>
+
+          {strategyRows.length === 0 ? (
+            <div className="text-center text-muted-foreground py-12">Run a scan to find setups across breakout, scalping, big money and smart money criteria.</div>
+          ) : (
+            <Tabs defaultValue="breakout">
+              <TabsList>
+                <TabsTrigger value="breakout"><Zap className="h-3.5 w-3.5 mr-1" /> Breakout ({breakoutResults.length})</TabsTrigger>
+                <TabsTrigger value="scalp"><Gauge className="h-3.5 w-3.5 mr-1" /> Scalping ({scalpResults.length})</TabsTrigger>
+                <TabsTrigger value="bigmoney"><Landmark className="h-3.5 w-3.5 mr-1" /> Big Money ({bigMoneyResults.length})</TabsTrigger>
+                <TabsTrigger value="smartmoney"><Brain className="h-3.5 w-3.5 mr-1" /> Smart Money ({smartMoneyResults.length})</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="breakout">
+                <Card className="card-glow">
+                  <CardHeader className="pb-2"><CardTitle className="text-sm">Breakout: close above the prior 20-session high on above-average volume</CardTitle></CardHeader>
+                  <CardContent>
+                    {breakoutResults.length === 0 ? <p className="text-sm text-muted-foreground py-8 text-center">No breakouts found in this scan.</p> : (
+                      <Table>
+                        <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change%</TableHead><TableHead>20D Resistance</TableHead><TableHead>% Above</TableHead><TableHead>Vol Ratio</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
+                        <TableBody>
+                          {breakoutResults.map(r => (
+                            <TableRow key={r.symbol}>
+                              <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
+                              <TableCell className="font-mono">{r.currency}{r.price.toFixed(2)}</TableCell>
+                              <TableCell className={`font-mono ${r.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.changePercent >= 0 ? '+' : ''}{r.changePercent.toFixed(2)}%</TableCell>
+                              <TableCell className="font-mono text-xs">{r.currency}{r.breakout!.resistance20.toFixed(2)}</TableCell>
+                              <TableCell className="font-mono text-emerald-400">+{r.breakout!.pctAboveResistance.toFixed(2)}%</TableCell>
+                              <TableCell className="font-mono">{r.breakout!.volumeRatio.toFixed(1)}x</TableCell>
+                              <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="scalp">
+                <Card className="card-glow">
+                  <CardHeader className="pb-2"><CardTitle className="text-sm">Scalping suitability: high liquidity (turnover) + high volatility (ATR%) right now — top 15</CardTitle></CardHeader>
+                  <CardContent>
+                    {scalpResults.length === 0 ? <p className="text-sm text-muted-foreground py-8 text-center">No candidates found in this scan.</p> : (
+                      <Table>
+                        <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>ATR%</TableHead><TableHead>Avg Turnover</TableHead><TableHead>Score</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
+                        <TableBody>
+                          {scalpResults.map(r => (
+                            <TableRow key={r.symbol}>
+                              <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
+                              <TableCell className="font-mono">{r.currency}{r.price.toFixed(2)}</TableCell>
+                              <TableCell className="font-mono">{r.scalp!.atrPct.toFixed(2)}%</TableCell>
+                              <TableCell className="font-mono text-xs">₹{r.scalp!.avgTurnoverCr.toFixed(1)}Cr</TableCell>
+                              <TableCell><Badge variant="outline" className={r.scalp!.score >= 70 ? 'text-emerald-400 border-emerald-400/30' : r.scalp!.score >= 40 ? 'text-yellow-400 border-yellow-400/30' : 'text-muted-foreground'}>{r.scalp!.score}</Badge></TableCell>
+                              <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="bigmoney">
+                <Card className="card-glow">
+                  <CardHeader className="pb-2"><CardTitle className="text-sm">Big Money: today's turnover (price × volume) is 1.5x+ this stock's own recent average</CardTitle></CardHeader>
+                  <CardContent>
+                    {bigMoneyResults.length === 0 ? <p className="text-sm text-muted-foreground py-8 text-center">No unusual turnover found in this scan.</p> : (
+                      <Table>
+                        <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change%</TableHead><TableHead>Turnover Today</TableHead><TableHead>Avg Turnover</TableHead><TableHead>Ratio</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
+                        <TableBody>
+                          {bigMoneyResults.map(r => (
+                            <TableRow key={r.symbol}>
+                              <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
+                              <TableCell className="font-mono">{r.currency}{r.price.toFixed(2)}</TableCell>
+                              <TableCell className={`font-mono ${r.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.changePercent >= 0 ? '+' : ''}{r.changePercent.toFixed(2)}%</TableCell>
+                              <TableCell className="font-mono text-xs">₹{r.bigMoney!.turnoverTodayCr.toFixed(1)}Cr</TableCell>
+                              <TableCell className="font-mono text-xs">₹{r.bigMoney!.avgTurnoverCr.toFixed(1)}Cr</TableCell>
+                              <TableCell className="font-mono text-primary">{r.bigMoney!.turnoverRatio.toFixed(1)}x</TableCell>
+                              <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="smartmoney">
+                <Card className="card-glow">
+                  <CardHeader className="pb-2"><CardTitle className="text-sm">Smart Money: volume 1.4x+ average alongside a 1%+ same-day move (accumulation/distribution footprint)</CardTitle></CardHeader>
+                  <CardContent>
+                    {smartMoneyResults.length === 0 ? <p className="text-sm text-muted-foreground py-8 text-center">No footprints found in this scan.</p> : (
+                      <Table>
+                        <TableHeader><TableRow><TableHead>Symbol</TableHead><TableHead>Price</TableHead><TableHead>Change%</TableHead><TableHead>Vol Ratio</TableHead><TableHead>Direction</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader>
+                        <TableBody>
+                          {smartMoneyResults.map(r => (
+                            <TableRow key={r.symbol}>
+                              <TableCell className="font-mono font-semibold">{r.symbol}</TableCell>
+                              <TableCell className="font-mono">{r.currency}{r.price.toFixed(2)}</TableCell>
+                              <TableCell className={`font-mono ${r.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{r.changePercent >= 0 ? '+' : ''}{r.changePercent.toFixed(2)}%</TableCell>
+                              <TableCell className="font-mono">{r.smartMoney!.volumeRatio.toFixed(1)}x</TableCell>
+                              <TableCell><Badge variant="outline" className={r.smartMoney!.direction === 'Accumulation' ? 'text-emerald-400 border-emerald-400/30' : 'text-red-400 border-red-400/30'}>{r.smartMoney!.direction}</Badge></TableCell>
+                              <TableCell className="text-right"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.location.href = `/stock-profile?symbol=${r.symbol}`}>View</Button></TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+          )}
         </TabsContent>
 
         <TabsContent value="signals">

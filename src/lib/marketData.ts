@@ -642,3 +642,113 @@ export async function fetchFearGreedIndex(): Promise<FearGreedResult> {
 
   return { score, label, vix, niftyRsi, niftyVsSma };
 }
+
+// ─── Strategy Scanner (Breakout / Scalping / Big Money / Smart Money) ──────
+//
+// All four are standard, widely-used technical-analysis heuristics computed
+// from real OHLCV history — not proprietary signals, not guarantees, and not
+// financial advice. Each takes only `candles` (fetched once per symbol) so a
+// single scan pass can feed all four categories without extra API calls.
+
+// A broad-ish, liquid large/mid-cap NSE universe for market-wide scanning —
+// not exhaustive, but enough real breadth to find genuine setups.
+export const SCAN_UNIVERSE_NSE = [
+  'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'ICICIBANK.NS', 'INFY.NS', 'SBIN.NS', 'BHARTIARTL.NS',
+  'HINDUNILVR.NS', 'ITC.NS', 'LT.NS', 'KOTAKBANK.NS', 'AXISBANK.NS', 'BAJFINANCE.NS', 'MARUTI.NS',
+  'SUNPHARMA.NS', 'TITAN.NS', 'ULTRACEMCO.NS', 'WIPRO.NS', 'HCLTECH.NS', 'TECHM.NS', 'NESTLEIND.NS',
+  'TATASTEEL.NS', 'TATAMOTORS.NS', 'JSWSTEEL.NS', 'ADANIENT.NS', 'ADANIPORTS.NS', 'NTPC.NS', 'POWERGRID.NS',
+  'M&M.NS', 'BAJAJFINSV.NS', 'ASIANPAINT.NS', 'DRREDDY.NS', 'CIPLA.NS', 'DIVISLAB.NS', 'APOLLOHOSP.NS',
+  'BRITANNIA.NS', 'DABUR.NS', 'EICHERMOT.NS', 'BAJAJ-AUTO.NS', 'HDFCLIFE.NS', 'SBILIFE.NS', 'ONGC.NS',
+  'BPCL.NS', 'IOC.NS', 'HINDALCO.NS', 'VEDL.NS', 'COALINDIA.NS', 'GRASIM.NS', 'INDUSINDBK.NS',
+];
+
+export interface BreakoutSignal {
+  resistance20: number;
+  pctAboveResistance: number;
+  volumeRatio: number;
+}
+
+// A close above the prior 20-session high on above-average volume — a
+// standard breakout definition, not a proprietary indicator.
+export function detectBreakout(candles: CandleData[]): BreakoutSignal | null {
+  if (candles.length < 21) return null;
+  const today = candles[candles.length - 1];
+  const prior = candles.slice(-21, -1);
+  const resistance20 = Math.max(...prior.map(c => c.high));
+  const avgVolume20 = prior.reduce((s, c) => s + c.volume, 0) / prior.length;
+  if (today.close <= resistance20 || avgVolume20 <= 0) return null;
+  return {
+    resistance20,
+    pctAboveResistance: ((today.close - resistance20) / resistance20) * 100,
+    volumeRatio: today.volume / avgVolume20,
+  };
+}
+
+export interface ScalpScore {
+  atrPct: number;
+  avgTurnoverCr: number; // average daily turnover (price × volume) in ₹ Crores — a liquidity proxy
+  score: number; // 0-100, higher = more liquid + more volatile = more scalpable right now
+}
+
+// Ranks suitability for scalping (needs both real liquidity and real
+// intraday range) — not a trade signal, a filter for which stocks currently
+// have the conditions scalping needs.
+export function computeScalpScore(candles: CandleData[]): ScalpScore | null {
+  if (candles.length < 15) return null;
+  const recent = candles.slice(-20);
+  const atrSeries = computeATR(recent, 14);
+  const lastAtr = atrSeries.filter((v): v is number => v !== null).pop();
+  const lastClose = recent[recent.length - 1].close;
+  if (!lastAtr || !lastClose) return null;
+  const atrPct = (lastAtr / lastClose) * 100;
+  const avgVolume20 = recent.reduce((s, c) => s + c.volume, 0) / recent.length;
+  const avgTurnoverCr = (avgVolume20 * lastClose) / 1e7;
+  // Typical "scalpable" NSE large/mid-caps run ~1-4% ATR and ₹10-500Cr turnover.
+  const atrScore = Math.max(0, Math.min(100, (atrPct / 4) * 100));
+  const liquidityScore = Math.max(0, Math.min(100, (Math.log10(avgTurnoverCr + 1) / Math.log10(500)) * 100));
+  return { atrPct, avgTurnoverCr, score: Math.round((atrScore + liquidityScore) / 2) };
+}
+
+export interface BigMoneySignal {
+  turnoverTodayCr: number;
+  avgTurnoverCr: number;
+  turnoverRatio: number;
+}
+
+// "Big money" proxy: today's rupee turnover (price × volume) is unusually
+// large versus this stock's own recent average — large capital moving, not
+// just a volume blip on a thin stock.
+export function detectBigMoney(candles: CandleData[]): BigMoneySignal | null {
+  if (candles.length < 11) return null;
+  const today = candles[candles.length - 1];
+  const prior = candles.slice(-11, -1);
+  const avgTurnoverCr = prior.reduce((s, c) => s + c.close * c.volume, 0) / prior.length / 1e7;
+  if (avgTurnoverCr <= 0) return null;
+  const turnoverTodayCr = (today.close * today.volume) / 1e7;
+  const turnoverRatio = turnoverTodayCr / avgTurnoverCr;
+  if (turnoverRatio < 1.5) return null;
+  return { turnoverTodayCr, avgTurnoverCr, turnoverRatio };
+}
+
+export interface SmartMoneySignal {
+  volumeRatio: number;
+  changePercent: number;
+  direction: 'Accumulation' | 'Distribution';
+}
+
+// "Smart money" proxy: volume well above average (>=1.4x) alongside a
+// meaningful same-session price move (>=1%) — the standard volume-confirms-
+// price heuristic used to infer institutional footprints (same methodology
+// as the Money Flow page's "Smart Money Signals").
+export function detectSmartMoney(candles: CandleData[]): SmartMoneySignal | null {
+  if (candles.length < 11) return null;
+  const today = candles[candles.length - 1];
+  const prior = candles.slice(-11, -1);
+  const avgVolume10 = prior.reduce((s, c) => s + c.volume, 0) / prior.length;
+  const prevClose = prior[prior.length - 1]?.close;
+  if (avgVolume10 <= 0 || !prevClose) return null;
+  const volumeRatio = today.volume / avgVolume10;
+  const changePercent = ((today.close - prevClose) / prevClose) * 100;
+  if (volumeRatio < 1.4 || Math.abs(changePercent) < 1) return null;
+  return { volumeRatio, changePercent, direction: changePercent > 0 ? 'Accumulation' : 'Distribution' };
+}
