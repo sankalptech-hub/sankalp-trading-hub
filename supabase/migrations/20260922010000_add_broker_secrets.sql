@@ -19,6 +19,18 @@ CREATE TABLE public.broker_secrets (
 );
 ALTER TABLE public.broker_secrets ENABLE ROW LEVEL SECURITY;
 
+-- Defined here with CREATE OR REPLACE (not assumed to already exist) since the
+-- live database turned out not to match this repo's earlier migration history
+-- 1:1 — an earlier migration file defines this same function, but it wasn't
+-- actually present when this migration was applied.
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = public;
+
 CREATE TRIGGER trg_broker_secrets_updated
   BEFORE UPDATE ON public.broker_secrets
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
