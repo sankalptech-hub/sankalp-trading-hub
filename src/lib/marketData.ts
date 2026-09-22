@@ -1,3 +1,5 @@
+import { groww, toGrowwSymbol } from '@/lib/growwService';
+
 const CACHE_DURATION = 60000;
 
 interface CachedPrice {
@@ -13,6 +15,7 @@ interface CachedPrice {
   fiftyTwoWeekHigh: number;
   fiftyTwoWeekLow: number;
   timestamp: number;
+  source: 'groww' | 'yahoo';
 }
 
 function getCacheKey(symbol: string) {
@@ -48,6 +51,8 @@ export interface PriceData {
   fiftyTwoWeekHigh: number;
   fiftyTwoWeekLow: number;
   cached: boolean;
+  /** Real live data from the user's connected Groww account, or Yahoo's ~15min-delayed feed as fallback */
+  source: 'groww' | 'yahoo';
 }
 
 export function getCurrencySymbol(symbol: string): string {
@@ -68,12 +73,36 @@ export class PriceFetchError extends Error {
   }
 }
 
-export async function fetchPrice(symbol: string): Promise<PriceData> {
-  const cached = getCached(symbol);
-  if (cached) return { ...cached, cached: true };
+async function fetchPriceFromGroww(upper: string): Promise<CachedPrice | null> {
+  const growwSymbol = toGrowwSymbol(upper);
+  if (!growwSymbol) return null; // not an NSE/BSE symbol — Groww can't serve it
+  try {
+    const res = await groww.quote(growwSymbol.exchange, growwSymbol.tradingSymbol);
+    if (res.error || !res.data || typeof res.data.last_price !== 'number') return null;
+    const q = res.data;
+    const price = q.last_price;
+    const change = q.day_change ?? 0;
+    return {
+      price,
+      change,
+      changePercent: q.day_change_perc ?? 0,
+      volume: q.volume ?? 0,
+      high: q.ohlc?.high ?? price,
+      low: q.ohlc?.low ?? price,
+      open: q.ohlc?.open ?? price,
+      prevClose: price - change,
+      marketCap: q.market_cap ?? 0,
+      fiftyTwoWeekHigh: q.week_52_high ?? price,
+      fiftyTwoWeekLow: q.week_52_low ?? price,
+      timestamp: Date.now(),
+      source: 'groww',
+    };
+  } catch {
+    return null;
+  }
+}
 
-  const upper = symbol.toUpperCase();
-
+async function fetchPriceFromYahoo(upper: string): Promise<CachedPrice> {
   // Call the edge function URL directly with query params (functions.invoke doesn't
   // pass query strings cleanly for GET requests).
   const functionsUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-price`;
@@ -89,7 +118,7 @@ export async function fetchPrice(symbol: string): Promise<PriceData> {
       throw new PriceFetchError(json.error ?? `Request failed (${resp.status})`, upper);
     }
 
-    const data: CachedPrice = {
+    return {
       price: json.price,
       change: json.change,
       changePercent: json.changePercent,
@@ -102,13 +131,25 @@ export async function fetchPrice(symbol: string): Promise<PriceData> {
       fiftyTwoWeekHigh: json.fiftyTwoWeekHigh,
       fiftyTwoWeekLow: json.fiftyTwoWeekLow,
       timestamp: Date.now(),
+      source: 'yahoo',
     };
-    setCache(symbol, data);
-    return { ...data, cached: false };
   } catch (e) {
     if (e instanceof PriceFetchError) throw e;
     throw new PriceFetchError(`Network error fetching ${upper}`, upper);
   }
+}
+
+// Real data from the user's own connected Groww account when possible (NSE/BSE
+// symbols only); falls back to Yahoo's ~15min-delayed feed for everyone else
+// (not connected, or a non-Indian symbol Groww can't serve).
+export async function fetchPrice(symbol: string): Promise<PriceData> {
+  const cached = getCached(symbol);
+  if (cached) return { ...cached, cached: true };
+
+  const upper = symbol.toUpperCase();
+  const data = (await fetchPriceFromGroww(upper)) ?? (await fetchPriceFromYahoo(upper));
+  setCache(symbol, data);
+  return { ...data, cached: false };
 }
 
 export interface CandleData {
@@ -142,6 +183,40 @@ function setCandleCache(symbol: string, interval: string, range: string, data: C
   localStorage.setItem(getCandleCacheKey(symbol, interval, range), JSON.stringify({ data, timestamp: Date.now() }));
 }
 
+// Groww's range params are absolute start/end timestamps, not Yahoo-style
+// range buckets — approximate each Yahoo range as a number of trailing days.
+const RANGE_TO_DAYS: Record<string, number> = {
+  '1d': 1, '5d': 5, '1mo': 30, '3mo': 90, '6mo': 180,
+  '1y': 365, '2y': 730, '5y': 1825, '10y': 3650, 'ytd': 365, 'max': 3650,
+};
+
+function growwTimeWindow(range: string): { startTime: string; endTime: string } {
+  const days = RANGE_TO_DAYS[range] ?? 90;
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 86400000);
+  const fmt = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ');
+  return { startTime: fmt(start), endTime: fmt(end) };
+}
+
+async function fetchCandlesFromGroww(upper: string, interval: string, range: string): Promise<CandleData[] | null> {
+  if (interval !== '1d') return null; // only daily candles are wired up
+  const growwSymbol = toGrowwSymbol(upper);
+  if (!growwSymbol) return null;
+  try {
+    const { startTime, endTime } = growwTimeWindow(range);
+    const res = await groww.candles(growwSymbol.exchange, growwSymbol.tradingSymbol, startTime, endTime, 1440);
+    if (res.error || !res.data?.candles?.length) return null;
+    return res.data.candles.map(([ts, open, high, low, close, volume]) => ({
+      date: new Date(ts * 1000).toISOString().split('T')[0],
+      open, high, low, close, volume,
+    }));
+  } catch {
+    return null;
+  }
+}
+
+// Real data from the user's own connected Groww account when possible (daily
+// candles, NSE/BSE symbols only); falls back to Yahoo otherwise.
 export async function fetchCandleData(
   symbol: string,
   interval = '1d',
@@ -154,6 +229,13 @@ export async function fetchCandleData(
   }
 
   const upper = symbol.toUpperCase();
+
+  const growwCandles = await fetchCandlesFromGroww(upper, interval, range);
+  if (growwCandles) {
+    setCandleCache(symbol, interval, range, growwCandles);
+    return growwCandles;
+  }
+
   const functionsUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-price`;
   const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 

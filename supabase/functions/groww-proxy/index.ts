@@ -321,6 +321,30 @@ serve(async (req) => {
       return json({ data });
     }
 
+    if (action === "quote") {
+      const { exchange, tradingSymbol } = payload ?? {};
+      if (!exchange || !tradingSymbol) return json({ error: "exchange and tradingSymbol are required" }, 400);
+      const data = await growwFetch(
+        accessToken,
+        `/live-data/quote?exchange=${encodeURIComponent(exchange)}&segment=CASH&trading_symbol=${encodeURIComponent(tradingSymbol)}`
+      );
+      return json({ data });
+    }
+
+    if (action === "candles") {
+      const { exchange, tradingSymbol, startTime, endTime, intervalInMinutes } = payload ?? {};
+      if (!exchange || !tradingSymbol || !startTime || !endTime) {
+        return json({ error: "exchange, tradingSymbol, startTime and endTime are required" }, 400);
+      }
+      const qs = new URLSearchParams({
+        exchange, segment: "CASH", trading_symbol: tradingSymbol,
+        start_time: startTime, end_time: endTime,
+        interval_in_minutes: String(intervalInMinutes ?? 1440),
+      });
+      const data = await growwFetch(accessToken, `/historical/candle/range?${qs.toString()}`);
+      return json({ data });
+    }
+
     if (action === "place_order") {
       const p = payload ?? {};
       if (!p.tradingSymbol || !p.exchange || !p.side || !p.quantity) {

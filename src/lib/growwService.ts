@@ -45,6 +45,20 @@ export interface GrowwOrder {
   created_at?: string;
 }
 
+export interface GrowwQuote {
+  last_price: number;
+  day_change?: number;
+  day_change_perc?: number;
+  volume?: number;
+  ohlc?: { open?: number; high?: number; low?: number; close?: number };
+  week_52_high?: number;
+  week_52_low?: number;
+  market_cap?: number;
+}
+
+// Each candle: [timestamp_epoch_seconds, open, high, low, close, volume]
+export type GrowwCandle = [number, number, number, number, number, number];
+
 export interface GrowwFunds {
   availableBalance: number;
   usedMargin: number;
@@ -141,6 +155,14 @@ export const groww = {
 
   /** Get live LTP for a list of app-style symbols (e.g. RELIANCE.NS) */
   marketQuote: (symbols: string[]) => callProxy<Record<string, { ltp: number }>>('market_quote', { symbols }),
+
+  /** Full live quote (price, change, volume, OHLC, 52w range) for one symbol */
+  quote: (exchange: 'NSE' | 'BSE', tradingSymbol: string) =>
+    callProxy<GrowwQuote>('quote', { exchange, tradingSymbol }),
+
+  /** Historical daily candles for one symbol over a start/end window */
+  candles: (exchange: 'NSE' | 'BSE', tradingSymbol: string, startTime: string, endTime: string, intervalInMinutes = 1440) =>
+    callProxy<{ candles: GrowwCandle[] }>('candles', { exchange, tradingSymbol, startTime, endTime, intervalInMinutes }),
 
   /**
    * Admin-only global signal scan. NOTE: this calls a `signal-scanner` edge
