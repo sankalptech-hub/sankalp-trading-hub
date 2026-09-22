@@ -15,7 +15,6 @@ import { Loader2, Radar, Bookmark, Zap, Gauge, Landmark, Brain } from 'lucide-re
 import {
   fetchPrice, fetchCandleData, computeRSI, computeATR, getCurrencySymbol,
   WATCHLIST_NSE_MAIN, WATCHLIST_NSE_TECH, WATCHLIST_US_TECH, WATCHLIST_US_FINANCE, WATCHLIST_CANADA_TSX, WATCHLIST_UK_LSE, WATCHLIST_GLOBAL_ETFS,
-  SCAN_UNIVERSE_NSE,
   BreakoutSignal, ScalpScore, BigMoneySignal, SmartMoneySignal,
 } from '@/lib/marketData';
 import { EXCHANGES, getExchangeForSymbol } from '@/lib/marketHours';
@@ -73,6 +72,7 @@ const Scanner = () => {
   const [dbScanRows, setDbScanRows] = useState<DbScanRow[]>([]);
   const [loadingScanRows, setLoadingScanRows] = useState(true);
   const [triggeringScan, setTriggeringScan] = useState(false);
+  const [universeSize, setUniverseSize] = useState<number | null>(null);
 
   const loadStrategyResults = async () => {
     setLoadingScanRows(true);
@@ -82,7 +82,10 @@ const Scanner = () => {
     setLoadingScanRows(false);
   };
 
-  useEffect(() => { loadStrategyResults(); }, []);
+  useEffect(() => {
+    loadStrategyResults();
+    supabase.from('nse_universe').select('*', { count: 'exact', head: true }).then(({ count }) => setUniverseSize(count ?? null));
+  }, []);
 
   const triggerManualScan = async () => {
     setTriggeringScan(true);
@@ -315,7 +318,7 @@ const Scanner = () => {
                 )}
               </div>
               <p className="text-[10px] text-muted-foreground mt-3">
-                Scans {SCAN_UNIVERSE_NSE.length} liquid NSE large/mid-caps automatically every 15 minutes during market hours (9:15am-3:30pm IST, Mon-Fri) — this page just displays the latest results, no need to trigger it yourself. Standard technical-analysis heuristics computed from real price/volume history — not signals from a paid data provider, not financial advice. See each tab's description for the exact rule.
+                Rotates through {universeSize ? universeSize.toLocaleString('en-IN') : 'the full'} NSE-listed equities in the background automatically, ~400 at a time every 15 minutes during market hours (8:30am-3:30pm IST, Mon-Fri) — the full universe cycles roughly every 1.5-2 hours, so results across different stocks may be a few chunks apart in freshness. This page just displays the latest results, no need to trigger it yourself. Standard technical-analysis heuristics computed from real price/volume history — not signals from a paid data provider, not financial advice. See each tab's description for the exact rule.
               </p>
             </CardContent>
           </Card>

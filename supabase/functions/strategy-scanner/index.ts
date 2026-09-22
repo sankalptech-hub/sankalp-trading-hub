@@ -1,16 +1,24 @@
 // Supabase Edge Function: strategy-scanner
 //
-// Background market scanner. Fetches recent daily candles (direct from
-// Yahoo's public chart endpoint — same source as get-price, no auth needed)
-// for a fixed universe of liquid NSE large/mid-caps, computes four standard
-// technical-analysis heuristics (Breakout / Scalping / Big Money / Smart
-// Money — same definitions as src/lib/marketData.ts, ported here since edge
-// functions can't import the Vite frontend's TS modules directly), and
-// replaces the current matching set per category in
-// public.strategy_scan_results.
+// Background market scanner. Each invocation scans ONE chunk (default 250
+// symbols) of NSE's full equity universe (public.nse_universe, refreshed
+// daily by refresh-universe) — not the whole exchange at once, which isn't
+// feasible within a single request (Yahoo rate limits, function timeouts).
+// A cursor (public.strategy_scan_cursor) tracks rotation position so the
+// full ~2,664-stock universe cycles through over consecutive ticks
+// (roughly every 2-3 hours at 15-minute intervals).
+//
+// Computes four standard technical-analysis heuristics (Breakout / Scalping
+// / Big Money / Smart Money — same definitions as src/lib/marketData.ts,
+// ported here since edge functions can't import the Vite frontend's TS
+// modules directly). Unlike the old fixed-universe version, this UPSERTS
+// matches and DELETES non-matches per symbol in the current chunk only —
+// it must never touch rows for symbols outside this tick's chunk, since
+// those were written by earlier/later ticks scanning different chunks and
+// are still valid until their own turn comes back around.
 //
 // Invoked two ways: (1) a pg_cron job every 15 minutes during market hours
-// (see the add_strategy_scan_results migration), using the service-role key
+// (see the full_nse_universe_scanner migration), using the service-role key
 // as its bearer token; (2) a manual "Refresh now" button in the UI, using
 // the calling user's own session. Both pass verify_jwt's check, so no extra
 // auth logic is needed here.
@@ -22,16 +30,6 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-
-const SCAN_UNIVERSE_NSE = [
-  "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS", "SBIN.NS", "BHARTIARTL.NS",
-  "HINDUNILVR.NS", "ITC.NS", "LT.NS", "KOTAKBANK.NS", "AXISBANK.NS", "BAJFINANCE.NS", "MARUTI.NS",
-  "SUNPHARMA.NS", "TITAN.NS", "ULTRACEMCO.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS", "NESTLEIND.NS",
-  "TATASTEEL.NS", "TATAMOTORS.NS", "JSWSTEEL.NS", "ADANIENT.NS", "ADANIPORTS.NS", "NTPC.NS", "POWERGRID.NS",
-  "M&M.NS", "BAJAJFINSV.NS", "ASIANPAINT.NS", "DRREDDY.NS", "CIPLA.NS", "DIVISLAB.NS", "APOLLOHOSP.NS",
-  "BRITANNIA.NS", "DABUR.NS", "EICHERMOT.NS", "BAJAJ-AUTO.NS", "HDFCLIFE.NS", "SBILIFE.NS", "ONGC.NS",
-  "BPCL.NS", "IOC.NS", "HINDALCO.NS", "VEDL.NS", "COALINDIA.NS", "GRASIM.NS", "INDUSINDBK.NS",
-];
 
 interface Candle { date: string; open: number; high: number; low: number; close: number; volume: number }
 
@@ -143,6 +141,33 @@ serve(async (req) => {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
 
+    const { count: totalCount, error: countErr } = await admin
+      .from("nse_universe").select("*", { count: "exact", head: true });
+    if (countErr) throw new Error(`count nse_universe: ${countErr.message}`);
+    if (!totalCount || totalCount === 0) throw new Error("nse_universe is empty — run refresh-universe first");
+
+    const { data: cursorRow, error: cursorErr } = await admin
+      .from("strategy_scan_cursor").select("*").eq("id", true).single();
+    if (cursorErr) throw new Error(`read cursor: ${cursorErr.message}`);
+
+    const chunkSize = cursorRow.chunk_size;
+    const offset = cursorRow.next_offset % totalCount;
+
+    // Fetch the chunk, wrapping around to the start of the list if this
+    // chunk would run past the end.
+    const { data: firstPart, error: firstErr } = await admin
+      .from("nse_universe").select("symbol").order("symbol").range(offset, offset + chunkSize - 1);
+    if (firstErr) throw new Error(`read chunk: ${firstErr.message}`);
+
+    let chunkSymbols = (firstPart ?? []).map((r) => r.symbol as string);
+    if (chunkSymbols.length < chunkSize && offset + chunkSize > totalCount) {
+      const remaining = chunkSize - chunkSymbols.length;
+      const { data: wrapPart, error: wrapErr } = await admin
+        .from("nse_universe").select("symbol").order("symbol").range(0, remaining - 1);
+      if (wrapErr) throw new Error(`read wrap chunk: ${wrapErr.message}`);
+      chunkSymbols = chunkSymbols.concat((wrapPart ?? []).map((r) => r.symbol as string));
+    }
+
     type Row = {
       symbol: string; price: number; change_percent: number;
       breakout: ReturnType<typeof detectBreakout>;
@@ -151,7 +176,7 @@ serve(async (req) => {
       smartMoney: ReturnType<typeof detectSmartMoney>;
     };
 
-    const rows = await mapLimit(SCAN_UNIVERSE_NSE, 6, async (symbol): Promise<Row | null> => {
+    const rows = await mapLimit(chunkSymbols, 6, async (symbol): Promise<Row | null> => {
       try {
         const candles = await fetchCandles(symbol);
         if (candles.length < 11) return null;
@@ -183,27 +208,40 @@ serve(async (req) => {
 
     let totalWritten = 0;
     for (const { category, pick } of categories) {
-      const matches = valid
-        .map((r) => ({ r, metrics: pick(r) }))
-        .filter((x): x is { r: Row; metrics: Record<string, unknown> } => x.metrics !== null);
-
-      const { error: delErr } = await admin.from("strategy_scan_results").delete().eq("category", category);
-      if (delErr) throw new Error(`delete ${category}: ${delErr.message}`);
+      const matches = valid.map((r) => ({ r, metrics: pick(r) })).filter((x) => x.metrics !== null);
+      const nonMatchSymbols = valid.filter((r) => pick(r) === null).map((r) => r.symbol);
 
       if (matches.length > 0) {
-        const { error: insErr } = await admin.from("strategy_scan_results").insert(
+        const { error: upsertErr } = await admin.from("strategy_scan_results").upsert(
           matches.map(({ r, metrics }) => ({
             symbol: r.symbol, category, price: r.price, change_percent: r.change_percent,
             metrics, computed_at: now,
-          }))
+          })),
+          { onConflict: "symbol,category" }
         );
-        if (insErr) throw new Error(`insert ${category}: ${insErr.message}`);
+        if (upsertErr) throw new Error(`upsert ${category}: ${upsertErr.message}`);
         totalWritten += matches.length;
+      }
+
+      // Symbols in this chunk that no longer match get their stale row
+      // removed (only these — never touch symbols outside this chunk).
+      if (nonMatchSymbols.length > 0) {
+        const { error: delErr } = await admin.from("strategy_scan_results")
+          .delete().eq("category", category).in("symbol", nonMatchSymbols);
+        if (delErr) throw new Error(`delete stale ${category}: ${delErr.message}`);
       }
     }
 
+    const nextOffset = (offset + chunkSymbols.length) % totalCount;
+    const { error: advanceErr } = await admin.from("strategy_scan_cursor")
+      .update({ next_offset: nextOffset, updated_at: now }).eq("id", true);
+    if (advanceErr) throw new Error(`advance cursor: ${advanceErr.message}`);
+
     return new Response(
-      JSON.stringify({ scanned: SCAN_UNIVERSE_NSE.length, loaded: valid.length, written: totalWritten, at: now }),
+      JSON.stringify({
+        universeSize: totalCount, chunkOffset: offset, chunkScanned: chunkSymbols.length,
+        loaded: valid.length, written: totalWritten, nextOffset, at: now,
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {
