@@ -12,7 +12,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
-import { Plug, Eye, EyeOff, AlertTriangle, FlaskConical } from 'lucide-react';
+import { Plug, Eye, EyeOff, AlertTriangle, FlaskConical, Loader2 } from 'lucide-react';
+import { groww } from '@/lib/growwService';
 
 interface BrokerTemplate {
   broker_name: string;
@@ -34,7 +35,7 @@ interface BrokerTemplate {
 const BROKER_TEMPLATES: BrokerTemplate[] = [
   // INDIA
   { broker_name: 'zerodha', display_name: 'Zerodha (Kite Connect)', markets: 'NSE, BSE', fields: ['API Key', 'API Secret', 'Client ID', 'Access Token'], note: '', region: 'INDIA', flag: '🇮🇳', badge: 'Recommended for India', badgeColor: 'bg-emerald-500/20 text-emerald-400', color: 'bg-orange-500' },
-  { broker_name: 'groww', display_name: 'Groww', markets: 'NSE, BSE', fields: ['API Key', 'TOTP Secret'], note: "Generate an API key from Groww's web app under Settings > Trading APIs.", region: 'INDIA', flag: '🇮🇳', badge: 'Zero AMC', badgeColor: 'bg-teal-500/20 text-teal-400', color: 'bg-[#00D09C]' },
+  { broker_name: 'groww', display_name: 'Groww', markets: 'NSE, BSE', fields: ['API Key', 'API Secret'], note: "Requires an active Groww Trading API subscription (₹499+tax/month). Generate a key+secret at groww.in/trade-api/api-keys. This connects real orders — real money moves once you switch to Live.", region: 'INDIA', flag: '🇮🇳', badge: 'Zero AMC', badgeColor: 'bg-teal-500/20 text-teal-400', color: 'bg-[#00D09C]' },
   // GLOBAL
   { broker_name: 'alpaca', display_name: 'Alpaca', markets: 'US Stocks, ETFs, Crypto', fields: ['API Key ID', 'API Secret Key'], note: 'Zero commission US stocks & ETFs. Paper trading available.', isAlpaca: true, region: 'GLOBAL', flag: '🇺🇸', badge: 'Best for Global', badgeColor: 'bg-yellow-500/20 text-yellow-400', color: 'bg-[#FFCD00]', extras: ['Environment'] },
   { broker_name: 'ibkr', display_name: 'Interactive Brokers', markets: '150+ global exchanges', fields: ['Account ID', 'TWS Port', 'Client ID'], note: 'Requires TWS or IB Gateway running on your computer. Best for professional traders.', region: 'GLOBAL', flag: '🌍', badge: 'Professional Grade', badgeColor: 'bg-red-500/20 text-red-400', color: 'bg-red-600', extras: ['Paper Trading'], comingSoon: true },
@@ -62,6 +63,8 @@ const Brokers = () => {
   const [paperTrading, setPaperTrading] = useState(true);
   const [alpacaEnv, setAlpacaEnv] = useState<'paper' | 'live'>('paper');
   const [oandaEnv, setOandaEnv] = useState<'practice' | 'live'>('practice');
+  const [growwConnecting, setGrowwConnecting] = useState(false);
+  const [testingBroker, setTestingBroker] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -137,10 +140,29 @@ const Brokers = () => {
     load();
   };
 
+  const saveGroww = async () => {
+    if (!user || !modalBroker) return;
+    const errors: Record<string, string> = {};
+    if (!fields['API Key']?.trim()) errors['API Key'] = 'Required';
+    if (!fields['API Secret']?.trim()) errors['API Secret'] = 'Required';
+    if (Object.keys(errors).length > 0) { setFieldErrors(errors); return; }
+
+    setGrowwConnecting(true);
+    const res = await groww.connect(fields['API Key'].trim(), fields['API Secret'].trim());
+    setGrowwConnecting(false);
+    if (res.error) { toast.error(`Groww connection failed: ${res.error}`); return; }
+
+    toast.success('Connected to Groww');
+    setModalBroker(null);
+    load();
+    refreshMode();
+  };
+
   const saveConnect = async () => {
     if (!user || !modalBroker) return;
     if (modalBroker.broker_name === 'alpaca') return saveAlpaca();
     if (modalBroker.broker_name === 'oanda') return saveOanda();
+    if (modalBroker.broker_name === 'groww') return saveGroww();
 
     const existing = getBrokerStatus(modalBroker.broker_name);
     const configJson = { ...fields, paperTrading };
@@ -158,17 +180,32 @@ const Brokers = () => {
     refreshMode();
   };
 
-  const disconnect = async (brokerId: string) => {
-    await supabase.from('brokers').update({ status: 'disconnected' } as any).eq('id', brokerId);
+  const disconnect = async (brokerId: string, brokerName: string) => {
+    if (brokerName === 'groww') {
+      const res = await groww.disconnect();
+      if (res.error) { toast.error(res.error); return; }
+    } else {
+      await supabase.from('brokers').update({ status: 'disconnected' } as any).eq('id', brokerId);
+    }
     toast.success('Disconnected');
     load();
     refreshMode();
   };
 
-  const testConnection = (name: string) => {
+  const testConnection = async (brokerName: string, displayName: string) => {
+    if (brokerName === 'groww') {
+      setTestingBroker('groww');
+      const res = await groww.funds();
+      setTestingBroker(null);
+      if (res.error) toast.error(`Groww: ${res.error}`);
+      else toast.success(`Groww: Connection successful — available balance ₹${res.data?.availableBalance?.toLocaleString('en-IN') ?? '0'}`);
+      return;
+    }
+    // Other brokers aren't wired to a real API yet (see repo audit notes) —
+    // this stays a placeholder until they get the same treatment as Groww.
     const success = Math.random() > 0.3;
-    if (success) toast.success(`${name}: Connection successful`);
-    else toast.error(`${name}: Connection failed`);
+    if (success) toast.success(`${displayName}: Connection successful`);
+    else toast.error(`${displayName}: Connection failed`);
   };
 
   const connectedCount = brokers.filter(b => b.status === 'connected').length;
@@ -224,6 +261,31 @@ const Brokers = () => {
         </div>
       ))}
       <div className="flex gap-3"><Button onClick={saveOanda}>Save & Connect</Button><Button variant="outline" onClick={() => setModalBroker(null)}>Cancel</Button></div>
+    </div>
+  );
+
+  const renderGrowwModal = () => (
+    <div className="space-y-4">
+      <div className="p-3 bg-red-500/10 border border-red-500/20 rounded flex items-center gap-2 text-xs text-red-400">
+        <AlertTriangle className="h-4 w-4 flex-shrink-0" /> This connects your real Groww account. Once connected and switched to Live mode, orders placed from the Trade page execute with real money.
+      </div>
+      <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-400">
+        Requires an active Groww Trading API subscription (₹499+tax/month). Generate an API Key + Secret at <span className="font-semibold">groww.in/trade-api/api-keys</span>. Credentials are sent straight to a server-side function and are never stored in your browser or visible to other users.
+      </div>
+      {['API Key', 'API Secret'].map(f => (
+        <div key={f}>
+          <Label>{f} *</Label>
+          <div className="relative">
+            <Input type={showPasswords[f] ? 'text' : 'password'} value={fields[f] || ''} onChange={e => { setFields(p => ({ ...p, [f]: e.target.value })); setFieldErrors(p => { const n = { ...p }; delete n[f]; return n; }); }} className={fieldErrors[f] ? 'border-destructive' : ''} />
+            <button className="absolute right-3 top-2.5 text-muted-foreground" onClick={() => setShowPasswords(p => ({ ...p, [f]: !p[f] }))}>{showPasswords[f] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
+          </div>
+          {fieldErrors[f] && <p className="text-xs text-destructive mt-1">{fieldErrors[f]}</p>}
+        </div>
+      ))}
+      <div className="flex gap-3">
+        <Button onClick={saveGroww} disabled={growwConnecting}>{growwConnecting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Verifying...</> : 'Save & Connect'}</Button>
+        <Button variant="outline" onClick={() => setModalBroker(null)}>Cancel</Button>
+      </div>
     </div>
   );
 
@@ -311,8 +373,8 @@ const Brokers = () => {
                       <div className="flex gap-2 flex-wrap">
                         {!isDemo && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openConfig(tmpl)}>Configure</Button>}
                         {existing && <Button size="sm" variant={existing.is_default ? 'default' : 'outline'} className="h-7 text-xs" onClick={() => setDefault(existing.id)}>{existing.is_default ? '★ Default' : 'Set Default'}</Button>}
-                        {existing?.status === 'connected' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => testConnection(tmpl.display_name)}>Test</Button>}
-                        {existing?.status === 'connected' && !isDemo && <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => disconnect(existing.id)}>Disconnect</Button>}
+                        {existing?.status === 'connected' && <Button size="sm" variant="outline" className="h-7 text-xs" disabled={testingBroker === tmpl.broker_name} onClick={() => testConnection(tmpl.broker_name, tmpl.display_name)}>{testingBroker === tmpl.broker_name ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Test'}</Button>}
+                        {existing?.status === 'connected' && !isDemo && <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => disconnect(existing.id, tmpl.broker_name)}>Disconnect</Button>}
                       </div>
                     </CardContent>
                   </Card>
@@ -354,6 +416,7 @@ const Brokers = () => {
           </DialogHeader>
           {modalBroker?.broker_name === 'alpaca' ? renderAlpacaModal() :
            modalBroker?.broker_name === 'oanda' ? renderOandaModal() :
+           modalBroker?.broker_name === 'groww' ? renderGrowwModal() :
            renderGenericModal()}
         </DialogContent>
       </Dialog>

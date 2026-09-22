@@ -14,6 +14,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { Loader2, AlertTriangle, Link as LinkIcon, FlaskConical } from 'lucide-react';
 import { fetchPrice, fetchCandleData, computeRSI, getCurrencySymbol, ALL_SYMBOLS } from '@/lib/marketData';
+import { groww, toGrowwSymbol } from '@/lib/growwService';
 
 const statusColor: Record<string, string> = {
   pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
@@ -123,9 +124,34 @@ const Trade = () => {
     const broker = brokers.find(b => b.id === selectedBroker);
     const brokerName = broker?.broker_name || 'demo';
     const isDemo = brokerName === 'demo';
+    let orderStatus = 'filled';
+
+    if (brokerName === 'groww' && !isDemo) {
+      const growwSymbol = toGrowwSymbol(upperSymbol);
+      if (!growwSymbol) {
+        setErrors({ symbol: 'Groww only supports NSE/BSE symbols (e.g. RELIANCE.NS, TCS.BO)' });
+        return;
+      }
+      const confirmed = window.confirm(
+        `Place a REAL ${side} order for ${quantity} ${upperSymbol} via Groww?\n\nThis is Live mode — real money will move. This cannot be undone from here.`
+      );
+      if (!confirmed) return;
+
+      const res = await groww.placeOrder({
+        tradingSymbol: growwSymbol.tradingSymbol,
+        exchange: growwSymbol.exchange,
+        side,
+        orderType: 'MARKET',
+        quantity,
+        product: 'CNC',
+      });
+      if (res.error) { toast.error(`Groww order failed: ${res.error}`); return; }
+      const status = (res.data?.order_status || '').toUpperCase();
+      orderStatus = status.includes('REJECT') ? 'cancelled' : status.includes('EXECUT') || status.includes('COMPLETE') ? 'filled' : 'pending';
+    }
 
     const { error: orderErr } = await supabase.from('orders').insert({
-      user_id: user.id, symbol: upperSymbol, qty: quantity, side, status: 'filled',
+      user_id: user.id, symbol: upperSymbol, qty: quantity, side, status: orderStatus,
       broker_id: selectedBroker || null, broker_name: brokerName,
     } as any);
     if (orderErr) { toast.error(orderErr.message); return; }
@@ -133,22 +159,30 @@ const Trade = () => {
     if (!isDemo && selectedBroker) {
       await supabase.from('broker_orders').insert({
         user_id: user.id, broker_id: selectedBroker, symbol: upperSymbol,
-        qty: quantity, side, price: executionPrice, status: 'filled',
+        qty: quantity, side, price: executionPrice, status: orderStatus,
       } as any);
     }
 
-    const { data: existing } = await supabase.from('positions').select('*').eq('user_id', user.id).eq('symbol', upperSymbol).maybeSingle();
-    if (existing) {
-      const newQty = side === 'BUY' ? existing.qty + quantity : existing.qty - quantity;
-      await supabase.from('positions').update({ qty: newQty }).eq('id', existing.id);
-    } else {
-      await supabase.from('positions').insert({ user_id: user.id, symbol: upperSymbol, qty: side === 'BUY' ? quantity : -quantity, avg_price: executionPrice });
+    // Only reflect the trade in local positions once it's actually filled — a
+    // pending/queued Groww order hasn't moved any shares yet.
+    if (orderStatus === 'filled') {
+      const { data: existing } = await supabase.from('positions').select('*').eq('user_id', user.id).eq('symbol', upperSymbol).maybeSingle();
+      if (existing) {
+        const newQty = side === 'BUY' ? existing.qty + quantity : existing.qty - quantity;
+        await supabase.from('positions').update({ qty: newQty }).eq('id', existing.id);
+      } else {
+        await supabase.from('positions').insert({ user_id: user.id, symbol: upperSymbol, qty: side === 'BUY' ? quantity : -quantity, avg_price: executionPrice });
+      }
     }
 
-    await supabase.from('alerts').insert({ user_id: user.id, message: `Trade executed: ${side} ${quantity} ${upperSymbol}`, type: 'success' });
+    await supabase.from('alerts').insert({ user_id: user.id, message: `Trade ${orderStatus}: ${side} ${quantity} ${upperSymbol}`, type: 'success' });
     await checkRisks(upperSymbol, quantity);
 
-    toast.success(isDemo ? `Demo order placed: ${side} ${quantity} ${upperSymbol}` : `Order sent to ${broker?.display_name}: ${side} ${quantity} ${upperSymbol}`);
+    toast.success(
+      isDemo ? `Demo order placed: ${side} ${quantity} ${upperSymbol}`
+      : brokerName === 'groww' ? `Groww order ${orderStatus}: ${side} ${quantity} ${upperSymbol}`
+      : `Order sent to ${broker?.display_name}: ${side} ${quantity} ${upperSymbol}`
+    );
     setSymbol(''); setQty(''); setErrors({}); setLivePrice(null); setLastSignal(null);
     fetchOrders();
   };

@@ -1,46 +1,48 @@
 /**
  * growwService.ts — Frontend service layer for the groww-proxy edge function.
- * Wraps every action with typed request/response shapes.
+ * The user's Groww API key/secret never touch this file's storage — they're
+ * posted once to `connect()` and held server-side only (public.broker_secrets,
+ * service-role only). Every other call here just asks the proxy to act using
+ * those stored credentials.
  * Usage: import { groww } from '@/lib/growwService'
  */
 
 import { supabase } from '@/integrations/supabase/client';
 
-// ─── Response types ───────────────────────────────────────────────────────────
+// ─── Response types (field names match the real Groww API payloads) ──────────
 
 export interface GrowwHolding {
-  tradingSymbol: string;
-  exchange: string;
   isin: string;
+  trading_symbol: string;
   quantity: number;
-  averagePrice: number;
-  ltp: number;              // last traded price
-  currentValue: number;
-  pnl: number;
-  pnlPercent: number;
+  average_price: number;
+  demat_free_quantity?: number;
+  pledge_quantity?: number;
+  t1_quantity?: number;
 }
 
 export interface GrowwPosition {
-  tradingSymbol: string;
+  trading_symbol: string;
   exchange: string;
+  symbol_isin?: string;
   quantity: number;
-  averagePrice: number;
-  ltp: number;
-  pnl: number;
-  side: 'BUY' | 'SELL';
+  product: string;
+  net_price?: number;
+  realised_pnl?: number;
 }
 
 export interface GrowwOrder {
-  orderId: string;
-  tradingSymbol: string;
+  groww_order_id: string;
+  trading_symbol: string;
   exchange: string;
-  side: 'BUY' | 'SELL';
-  orderType: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M';
+  transaction_type: 'BUY' | 'SELL';
+  order_type: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M';
   price: number;
   quantity: number;
-  filledQuantity: number;
-  status: string;
-  createdAt: string;
+  filled_quantity?: number;
+  order_status: string;
+  order_reference_id?: string;
+  created_at?: string;
 }
 
 export interface GrowwFunds {
@@ -64,7 +66,6 @@ export interface PlaceOrderPayload {
 export interface GrowwApiResponse<T> {
   data?: T;
   error?: string;
-  status?: number;
 }
 
 // ─── Internal helper ──────────────────────────────────────────────────────────
@@ -81,40 +82,57 @@ async function callProxy<T>(action: string, payload?: unknown): Promise<GrowwApi
 
     if (error) return { error: error.message };
     if (data?.error) return { error: data.error };
-    return { data: data as T };
+    return { data: data?.data as T };
   } catch (err: unknown) {
     return { error: err instanceof Error ? err.message : 'Unknown error' };
   }
 }
 
+// Converts an app symbol (RELIANCE.NS / RELIANCE.BO) into Groww's
+// { tradingSymbol, exchange } shape. Groww only supports NSE/BSE — anything
+// else (US tickers, forex, etc.) can't be traded through this broker.
+export function toGrowwSymbol(symbol: string): { tradingSymbol: string; exchange: 'NSE' | 'BSE' } | null {
+  const upper = symbol.toUpperCase();
+  if (upper.endsWith('.NS')) return { tradingSymbol: upper.slice(0, -3), exchange: 'NSE' };
+  if (upper.endsWith('.BO')) return { tradingSymbol: upper.slice(0, -3), exchange: 'BSE' };
+  return null;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export const groww = {
+  connect: (apiKey: string, apiSecret: string) =>
+    callProxy<{ connected: boolean }>('connect', { api_key: apiKey, api_secret: apiSecret }),
+
+  disconnect: () => callProxy<{ connected: boolean }>('disconnect'),
+
   /** Fetch equity holdings (long-term portfolio) */
-  portfolio: () => callProxy<{ data: GrowwHolding[] }>('portfolio'),
+  holdings: () => callProxy<GrowwHolding[]>('holdings'),
 
   /** Fetch intraday / F&O positions */
-  positions: () => callProxy<{ data: GrowwPosition[] }>('positions'),
+  positions: () => callProxy<GrowwPosition[]>('positions'),
 
   /** Fetch all orders (open + completed) */
-  orders: () => callProxy<{ data: GrowwOrder[] }>('orders'),
+  orders: () => callProxy<GrowwOrder[]>('orders'),
 
   /** Fetch available funds / margin */
   funds: () => callProxy<GrowwFunds>('funds'),
 
-  /** Place a new order */
-  placeOrder: (payload: PlaceOrderPayload) =>
-    callProxy<{ orderId: string; status: string }>('place_order', payload),
+  /** Place a new order. Real money moves if the account isn't in Groww's paper mode. */
+  placeOrder: (payload: PlaceOrderPayload) => callProxy<{ groww_order_id: string; order_status: string }>('place_order', payload),
 
   /** Cancel an existing order */
-  cancelOrder: (orderId: string) =>
-    callProxy<{ success: boolean }>('cancel_order', { order_id: orderId }),
+  cancelOrder: (orderId: string) => callProxy<{ groww_order_id: string; order_status: string }>('cancel_order', { order_id: orderId }),
 
-  /** Get live market quotes for a list of symbols */
-  marketQuote: (symbols: string[]) =>
-    callProxy<Record<string, { ltp: number; open: number; high: number; low: number; volume: number }>>('market_quote', { symbols }),
+  /** Get live LTP for a list of app-style symbols (e.g. RELIANCE.NS) */
+  marketQuote: (symbols: string[]) => callProxy<Record<string, { ltp: number }>>('market_quote', { symbols }),
 
-  /** Trigger a signal scan for the current user via the scanner function */
+  /**
+   * Admin-only global signal scan. NOTE: this calls a `signal-scanner` edge
+   * function that doesn't exist yet in this repo (pre-existing gap, not part
+   * of the Groww broker integration) — the "Run Global Scan" admin button
+   * will error until that function is built.
+   */
   runScan: async (symbols?: string[]) => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -131,33 +149,13 @@ export const groww = {
   },
 };
 
-// ─── Connection status check ──────────────────────────────────────────────────
-
 export async function checkGrowwConnected(userId: string): Promise<boolean> {
   const { data } = await supabase
-    .from('integrations')
+    .from('brokers')
     .select('id')
     .eq('user_id', userId)
-    .eq('provider', 'groww')
+    .eq('broker_name', 'groww')
+    .eq('status', 'connected')
     .maybeSingle();
   return !!data;
-}
-
-export async function saveGrowwApiKey(userId: string, apiKey: string): Promise<{ error?: string }> {
-  const { error } = await supabase.from('integrations').upsert({
-    user_id: userId,
-    provider: 'groww',
-    config_json: { api_key: apiKey },
-    updated_at: new Date().toISOString(),
-  }, { onConflict: 'user_id,provider' });
-  return { error: error?.message };
-}
-
-export async function removeGrowwApiKey(userId: string): Promise<{ error?: string }> {
-  const { error } = await supabase
-    .from('integrations')
-    .delete()
-    .eq('user_id', userId)
-    .eq('provider', 'groww');
-  return { error: error?.message };
 }
