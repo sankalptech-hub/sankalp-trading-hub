@@ -80,7 +80,22 @@ async function callProxy<T>(action: string, payload?: unknown): Promise<GrowwApi
       headers: { Authorization: `Bearer ${session.access_token}` },
     });
 
-    if (error) return { error: error.message };
+    if (error) {
+      // supabase-js's FunctionsHttpError.message is a generic wrapper
+      // ("Edge Function returned a non-2xx status code") — the actual
+      // {error: "..."} JSON body groww-proxy sent back is on error.context,
+      // a raw Response that needs to be read separately.
+      const context = (error as { context?: Response }).context;
+      if (context) {
+        try {
+          const body = await context.clone().json();
+          if (body?.error) return { error: body.error };
+        } catch {
+          // context wasn't JSON — fall through to the generic message
+        }
+      }
+      return { error: error.message };
+    }
     if (data?.error) return { error: data.error };
     return { data: data?.data as T };
   } catch (err: unknown) {
