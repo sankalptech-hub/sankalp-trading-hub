@@ -503,6 +503,70 @@ export async function fetchFundamentals(symbol: string): Promise<FundamentalsDat
   return data;
 }
 
+// ─── Financial statements (Income Statement / Balance Sheet / Cash Flow) ───
+
+export interface FinancialsData {
+  years: string[]; // fiscal year-end dates, ascending, aligned across all series below
+  incomeStatement: {
+    totalRevenue: (number | null)[];
+    grossProfit: (number | null)[];
+    operatingIncome: (number | null)[];
+    ebitda: (number | null)[];
+    netIncome: (number | null)[];
+    dilutedEPS: (number | null)[];
+  };
+  balanceSheet: {
+    totalAssets: (number | null)[];
+    totalLiabilities: (number | null)[];
+    stockholdersEquity: (number | null)[];
+    totalDebt: (number | null)[];
+    cashAndEquivalents: (number | null)[];
+  };
+  cashFlow: {
+    operatingCashFlow: (number | null)[];
+    investingCashFlow: (number | null)[];
+    financingCashFlow: (number | null)[];
+    capitalExpenditure: (number | null)[];
+    freeCashFlow: (number | null)[];
+  };
+}
+
+function getFinancialsCacheKey(symbol: string) {
+  return `yf_financials_${symbol.toUpperCase()}`;
+}
+
+export async function fetchFinancials(symbol: string): Promise<FinancialsData> {
+  const upper = symbol.toUpperCase();
+  try {
+    const raw = localStorage.getItem(getFinancialsCacheKey(upper));
+    if (raw) {
+      const { data, timestamp } = JSON.parse(raw);
+      if (Date.now() - timestamp < FUNDAMENTALS_CACHE_DURATION) return data;
+    }
+  } catch {
+    // ignore cache read errors
+  }
+
+  const functionsUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-price`;
+  const anonKey = getAnonKey();
+
+  const resp = await fetch(`${functionsUrl}?symbol=${encodeURIComponent(upper)}&mode=financials`, {
+    headers: { Authorization: `Bearer ${anonKey}`, apikey: anonKey },
+  });
+  const json = await resp.json();
+  if (!resp.ok || json.error) {
+    throw new PriceFetchError(json.error ?? `Request failed (${resp.status})`, upper);
+  }
+
+  const data: FinancialsData = json;
+  try {
+    localStorage.setItem(getFinancialsCacheKey(upper), JSON.stringify({ data, timestamp: Date.now() }));
+  } catch {
+    // ignore cache write errors
+  }
+  return data;
+}
+
 // ─── Peers ──────────────────────────────────────────────────────────────────
 
 export const SECTOR_PEERS: Record<string, string[]> = {

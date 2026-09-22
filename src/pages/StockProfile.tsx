@@ -9,9 +9,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { toast } from 'sonner';
 import { Loader2, Info, AlertTriangle, Gauge } from 'lucide-react';
 import {
-  fetchCandleData, fetchPrice, fetchFundamentals, fetchFearGreedIndex, getPeerSymbols,
+  fetchCandleData, fetchPrice, fetchFundamentals, fetchFinancials, fetchFearGreedIndex, getPeerSymbols,
   getCurrencySymbol, computeRSI,
-  CandleData, PriceData, FundamentalsData, FearGreedResult,
+  CandleData, PriceData, FundamentalsData, FinancialsData, FearGreedResult,
   NSE_SYMBOLS, US_SYMBOLS,
 } from '@/lib/marketData';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -39,6 +39,50 @@ function fmtCap(v: number | null, cur: string): string {
   if (v >= 1e7) return `${cur}${(v / 1e7).toFixed(2)}Cr`;
   return `${cur}${v.toLocaleString()}`;
 }
+// Same compact scaling as fmtCap but sign-aware, for financial statement line
+// items (cash flow rows are often negative).
+function fmtLarge(v: number | null, cur: string): string {
+  if (v === null) return 'N/A';
+  const sign = v < 0 ? '-' : '';
+  const abs = Math.abs(v);
+  if (abs >= 1e12) return `${sign}${cur}${(abs / 1e12).toFixed(2)}T`;
+  if (abs >= 1e9) return `${sign}${cur}${(abs / 1e9).toFixed(2)}B`;
+  if (abs >= 1e7) return `${sign}${cur}${(abs / 1e7).toFixed(2)}Cr`;
+  return `${sign}${cur}${abs.toLocaleString()}`;
+}
+function fiscalYearLabel(dateStr: string): string {
+  const d = new Date(dateStr);
+  return Number.isNaN(d.getTime()) ? dateStr : `FY${d.getFullYear()}`;
+}
+
+function FinancialTable({ years, rows, cur }: {
+  years: string[];
+  rows: { label: string; values: (number | null)[]; eps?: boolean }[];
+  cur: string;
+}) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Line item</TableHead>
+          {years.map(y => <TableHead key={y} className="text-right font-mono">{fiscalYearLabel(y)}</TableHead>)}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map(row => (
+          <TableRow key={row.label}>
+            <TableCell className="font-medium">{row.label}</TableCell>
+            {row.values.map((v, i) => (
+              <TableCell key={i} className={`text-right font-mono text-xs ${v !== null && v < 0 ? 'text-red-400' : ''}`}>
+                {row.eps ? (v === null ? 'N/A' : `${cur}${v.toFixed(2)}`) : fmtLarge(v, cur)}
+              </TableCell>
+            ))}
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
 
 type Grade = 'Low' | 'Avg' | 'High';
 const gradeColor: Record<Grade, string> = {
@@ -61,6 +105,8 @@ const StockProfile = () => {
   const [price, setPrice] = useState<PriceData | null>(null);
   const [fundamentals, setFundamentals] = useState<FundamentalsData | null>(null);
   const [fundamentalsError, setFundamentalsError] = useState('');
+  const [financials, setFinancials] = useState<FinancialsData | null>(null);
+  const [financialsError, setFinancialsError] = useState('');
   const [fearGreed, setFearGreed] = useState<FearGreedResult | null>(null);
   const [peerPrices, setPeerPrices] = useState<Record<string, PriceData>>({});
   const [loading, setLoading] = useState(false);
@@ -99,6 +145,19 @@ const StockProfile = () => {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, range]);
+
+  // Financial statements change quarterly at most and are heavier to fetch —
+  // keyed only on symbol (not chart range) so switching timeframes doesn't
+  // re-trigger this.
+  useEffect(() => {
+    let cancelled = false;
+    setFinancials(null);
+    setFinancialsError('');
+    fetchFinancials(symbol)
+      .then(f => { if (!cancelled) setFinancials(f); })
+      .catch(err => { if (!cancelled) setFinancialsError(err.message || 'Financial statements unavailable for this symbol'); });
+    return () => { cancelled = true; };
+  }, [symbol]);
 
   useEffect(() => {
     fetchFearGreedIndex().then(setFearGreed).catch(() => {});
@@ -302,6 +361,7 @@ const StockProfile = () => {
           <Tabs defaultValue="overview">
             <TabsList>
               <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="financials">Financials</TabsTrigger>
               <TabsTrigger value="forecasts">Forecasts</TabsTrigger>
               <TabsTrigger value="peers">Peers</TabsTrigger>
             </TabsList>
@@ -336,6 +396,55 @@ const StockProfile = () => {
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="financials" className="space-y-4">
+              {financialsError ? (
+                <Card className="card-glow"><CardContent className="pt-6"><p className="text-sm text-muted-foreground py-8 text-center">{financialsError}</p></CardContent></Card>
+              ) : !financials ? (
+                <Card className="card-glow"><CardContent className="pt-6"><div className="py-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div></CardContent></Card>
+              ) : (
+                <>
+                  <p className="text-[10px] text-muted-foreground">Annual figures from Yahoo Finance, most recent {financials.years.length} fiscal years. Red = negative.</p>
+                  <Card className="card-glow">
+                    <CardHeader className="pb-2"><CardTitle className="text-sm">Income Statement</CardTitle></CardHeader>
+                    <CardContent className="overflow-x-auto">
+                      <FinancialTable cur={cur} years={financials.years} rows={[
+                        { label: 'Total Revenue', values: financials.incomeStatement.totalRevenue },
+                        { label: 'Gross Profit', values: financials.incomeStatement.grossProfit },
+                        { label: 'Operating Income', values: financials.incomeStatement.operatingIncome },
+                        { label: 'EBITDA', values: financials.incomeStatement.ebitda },
+                        { label: 'Net Income', values: financials.incomeStatement.netIncome },
+                        { label: 'Diluted EPS', values: financials.incomeStatement.dilutedEPS, eps: true },
+                      ]} />
+                    </CardContent>
+                  </Card>
+                  <Card className="card-glow">
+                    <CardHeader className="pb-2"><CardTitle className="text-sm">Balance Sheet</CardTitle></CardHeader>
+                    <CardContent className="overflow-x-auto">
+                      <FinancialTable cur={cur} years={financials.years} rows={[
+                        { label: 'Total Assets', values: financials.balanceSheet.totalAssets },
+                        { label: 'Total Liabilities', values: financials.balanceSheet.totalLiabilities },
+                        { label: "Stockholders' Equity", values: financials.balanceSheet.stockholdersEquity },
+                        { label: 'Total Debt', values: financials.balanceSheet.totalDebt },
+                        { label: 'Cash & Equivalents', values: financials.balanceSheet.cashAndEquivalents },
+                      ]} />
+                    </CardContent>
+                  </Card>
+                  <Card className="card-glow">
+                    <CardHeader className="pb-2"><CardTitle className="text-sm">Cash Flow</CardTitle></CardHeader>
+                    <CardContent className="overflow-x-auto">
+                      <FinancialTable cur={cur} years={financials.years} rows={[
+                        { label: 'Operating Cash Flow', values: financials.cashFlow.operatingCashFlow },
+                        { label: 'Investing Cash Flow', values: financials.cashFlow.investingCashFlow },
+                        { label: 'Financing Cash Flow', values: financials.cashFlow.financingCashFlow },
+                        { label: 'Capital Expenditure', values: financials.cashFlow.capitalExpenditure },
+                        { label: 'Free Cash Flow', values: financials.cashFlow.freeCashFlow },
+                      ]} />
+                    </CardContent>
+                  </Card>
+                </>
+              )}
             </TabsContent>
 
             <TabsContent value="forecasts">
