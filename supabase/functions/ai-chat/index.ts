@@ -1,90 +1,92 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// Supabase Edge Function: ai-chat
+//
+// Chat backend for the AI Assistant page. Uses whichever AI provider/model
+// the user connected in Settings (ai_provider_secrets/ai_provider_settings —
+// same connection AI Signal and the background scanner use), not a separate
+// hardcoded gateway. Non-streaming by design: Anthropic's SSE format and
+// OpenAI-compatible delta streaming differ enough that unifying them isn't
+// worth it for a family portfolio assistant — a single JSON response after
+// a few seconds is plenty responsive here.
+
+import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
+const ANTHROPIC_VERSION = "2023-06-01";
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    // Verify the user is authenticated
-    const authHeader = req.headers.get("authorization");
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } }
-    );
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+
+    const authHeader = req.headers.get("authorization") ?? "";
+    const verifyClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
+    const { data: { user }, error: authErr } = await verifyClient.auth.getUser();
+    if (authErr || !user) return json({ error: "Unauthorized" }, 401);
+
+    const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
 
     const { messages, context } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    if (!Array.isArray(messages) || messages.length === 0) return json({ error: "messages is required" }, 400);
 
-    const systemPrompt = `You are a trading assistant for Sankalp Trading OS.
-You help users analyze their portfolio, understand their positions, and make informed trading decisions.
-Always be concise, data-driven, and highlight risks.
-Format your responses with markdown: use **bold**, bullet points, and tables when helpful.
-
-Current user portfolio context:
-Positions: ${context?.positions || 'None'}
-Recent orders: ${context?.orders || 'None'}
-Active signals: ${context?.signals || 'None'}
-Active strategies: ${context?.strategies || 'None'}`;
-
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages,
-        ],
-        stream: true,
-      }),
-    });
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limited. Please try again shortly." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "Credits exhausted. Please add funds." }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const t = await response.text();
-      console.error("AI gateway error:", response.status, t);
-      return new Response(JSON.stringify({ error: "AI gateway error" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    const { data: secretRow } = await admin.from("ai_provider_secrets").select("api_key").eq("id", true).maybeSingle();
+    const { data: settingsRow } = await admin.from("ai_provider_settings").select("selected_model, connected, provider, base_url").eq("id", true).maybeSingle();
+    if (!secretRow || !settingsRow?.connected) {
+      return json({ error: "AI provider not connected — connect one in Settings first" }, 400);
     }
+    const model = settingsRow.selected_model || "claude-haiku-4-5-20251001";
+    const provider = settingsRow.provider || "anthropic";
+    const baseUrl = settingsRow.base_url || "";
 
-    return new Response(response.body, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
-    });
+    const systemPrompt = `You are the in-app AI assistant for a family's personal trading dashboard. Help the user understand their own portfolio, orders, signals and strategies using ONLY the context data given below — never invent numbers or prices you weren't given. Be concise and specific. You are one input among others, not financial advice.
+
+Positions: ${context?.positions ?? "[]"}
+Recent orders: ${context?.orders ?? "[]"}
+Recent signals: ${context?.signals ?? "[]"}
+Strategies: ${context?.strategies ?? "[]"}`;
+
+    const convo = messages.map((m: any) => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content ?? "") }));
+
+    const isAnthropic = provider === "anthropic";
+    const aiUrl = isAnthropic ? `${ANTHROPIC_BASE}/messages` : `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    const aiHeaders: Record<string, string> = isAnthropic
+      ? { "x-api-key": secretRow.api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json" }
+      : { Authorization: `Bearer ${secretRow.api_key}`, "content-type": "application/json" };
+    const body = isAnthropic
+      ? { model, max_tokens: 800, system: systemPrompt, messages: convo }
+      : { model, max_tokens: 800, messages: [{ role: "system", content: systemPrompt }, ...convo] };
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    let aiRes: Response;
+    try {
+      aiRes = await fetch(aiUrl, { method: "POST", headers: aiHeaders, body: JSON.stringify(body), signal: controller.signal });
+    } catch (e) {
+      return json({ error: e instanceof Error && e.name === "AbortError" ? "AI provider timed out" : `Request failed: ${e instanceof Error ? e.message : e}` }, 502);
+    } finally {
+      clearTimeout(timeout);
+    }
+    const aiBody = await aiRes.json().catch(() => ({}));
+    if (!aiRes.ok) {
+      return json({ error: aiBody?.error?.message || aiBody?.error || `AI provider error (HTTP ${aiRes.status})` }, 502);
+    }
+    const text: string = isAnthropic ? (aiBody?.content?.[0]?.text ?? "") : (aiBody?.choices?.[0]?.message?.content ?? "");
+    if (!text) return json({ error: "AI provider returned an empty response" }, 502);
+
+    return json({ data: { content: text, model, provider } });
   } catch (e) {
-    console.error("chat error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }
 });

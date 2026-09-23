@@ -32,7 +32,7 @@
 // written regardless.
 
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -172,11 +172,11 @@ interface AiMatch {
 // user hasn't connected an AI provider in Settings yet; the rule-based scan
 // results above are written regardless of AI availability.
 async function generateAiSignals(admin: ReturnType<typeof createClient>, matches: AiMatch[]) {
-  if (matches.length === 0) return { attempted: 0, written: 0 };
+  if (matches.length === 0) return { attempted: 0, written: 0, skipped: 0 };
 
   const { data: secretRow } = await admin.from("ai_provider_secrets").select("api_key").eq("id", true).maybeSingle();
   const { data: settingsRow } = await admin.from("ai_provider_settings").select("selected_model, connected, provider, base_url").eq("id", true).maybeSingle();
-  if (!secretRow || !settingsRow?.connected) return { attempted: 0, written: 0 };
+  if (!secretRow || !settingsRow?.connected) return { attempted: 0, written: 0, skipped: 0 };
 
   const apiKey = secretRow.api_key as string;
   const model = (settingsRow.selected_model as string) || "claude-haiku-4-5-20251001";
@@ -190,7 +190,34 @@ async function generateAiSignals(admin: ReturnType<typeof createClient>, matches
   const now = new Date().toISOString();
 
   let written = 0;
-  await mapLimit(matches, 5, async (m) => {
+  let attempted = 0;
+  let lastError = "";
+  // Some models (large MoE ones especially) have real per-call latency that
+  // varies a lot. Without a phase-level deadline, a slow model could stall
+  // the whole tick past the platform's own execution cap — killing the
+  // function before it ever advances the cursor or writes ANY ai_signals,
+  // even ones that already finished. This budget guarantees the tick always
+  // completes and advances: once time's up, workers stop picking up new
+  // matches (already-inflight calls still get to finish), and whatever
+  // wasn't reached just waits for the next tick.
+  const phaseStart = Date.now();
+  const AI_PHASE_BUDGET_MS = 90_000;
+  const CONCURRENCY = 5;
+  const PER_CALL_TIMEOUT_MS = 15_000;
+
+  let next = 0;
+  async function worker() {
+    while (next < matches.length) {
+      if (Date.now() - phaseStart > AI_PHASE_BUDGET_MS) return;
+      const m = matches[next++];
+      attempted++;
+      await runOne(m);
+    }
+  }
+
+  async function runOne(m: AiMatch) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PER_CALL_TIMEOUT_MS);
     try {
       const cur = "₹";
       const prompt = `You are a disciplined equity research analyst producing a real trading call for a family's personal trading tool (not published financial advice). Base your call ONLY on the data below; do not invent facts not given here.
@@ -207,13 +234,21 @@ Respond with ONLY a single valid JSON object, no other text, in exactly this sha
         method: "POST",
         headers: aiHeaders,
         body: JSON.stringify({ model, max_tokens: 400, messages: [{ role: "user", content: prompt }] }),
+        signal: controller.signal,
       });
-      if (!aiRes.ok) return;
+      if (!aiRes.ok) {
+        lastError = `${m.symbol} (${m.category}): HTTP ${aiRes.status} — ${(await aiRes.text().catch(() => "")).slice(0, 200)}`;
+        console.error("[strategy-scanner ai]", lastError);
+        return;
+      }
       const aiBody = await aiRes.json().catch(() => ({}));
       const text: string = isAnthropic ? (aiBody?.content?.[0]?.text ?? "") : (aiBody?.choices?.[0]?.message?.content ?? "");
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
-      if (!["BUY", "SELL", "HOLD"].includes(parsed.signal)) return;
+      if (!["BUY", "SELL", "HOLD"].includes(parsed.signal)) {
+        lastError = `${m.symbol} (${m.category}): invalid signal "${parsed.signal}"`;
+        return;
+      }
 
       const { error } = await admin.from("ai_signals").upsert({
         symbol: m.symbol, category: m.category, signal: parsed.signal,
@@ -222,13 +257,23 @@ Respond with ONLY a single valid JSON object, no other text, in exactly this sha
         price: m.price, model, provider, computed_at: now,
       }, { onConflict: "symbol,category" });
       if (!error) written++;
-    } catch {
+      else { lastError = `${m.symbol} (${m.category}): upsert failed — ${error.message}`; console.error("[strategy-scanner ai]", lastError); }
+    } catch (e) {
       // One symbol's AI call failing must never take down the rest of the
       // chunk's scan — the deterministic result already stands on its own.
+      lastError = `${m.symbol} (${m.category}): ${e instanceof Error ? e.message : String(e)}`;
+      console.error("[strategy-scanner ai]", lastError);
+    } finally {
+      clearTimeout(timeout);
     }
-  });
+  }
 
-  return { attempted: matches.length, written };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, matches.length) }, worker));
+
+  return {
+    attempted, written, skipped: matches.length - attempted,
+    lastError: written < attempted ? lastError : undefined,
+  };
 }
 
 serve(async (req) => {
@@ -320,7 +365,20 @@ serve(async (req) => {
         );
         if (upsertErr) throw new Error(`upsert ${category}: ${upsertErr.message}`);
         totalWritten += matches.length;
-        for (const { r, metrics } of matches) {
+
+        // "Every match, uncapped" only makes sense for categories with a
+        // real gating condition (breakout/big_money/smart_money all return
+        // null unless a genuine threshold is crossed, so per-chunk matches
+        // stay naturally small). Scalp has no threshold — computeScalpScore
+        // returns a rank for almost every liquid stock — so "every match"
+        // there would mean an AI call per symbol in the chunk, which blows
+        // past both the provider's rate limit and this function's time
+        // budget and silently kills the whole batch. Cap it to the same
+        // top-15-by-score the Scanner UI already shows.
+        const forAi = category === "scalp"
+          ? [...matches].sort((a, b) => (b.metrics!.score as number) - (a.metrics!.score as number)).slice(0, 15)
+          : matches;
+        for (const { r, metrics } of forAi) {
           aiMatches.push({ symbol: r.symbol, category, price: r.price, change_percent: r.change_percent, metrics: metrics as Record<string, unknown> });
         }
       }
@@ -353,6 +411,7 @@ serve(async (req) => {
         universeSize: totalCount, chunkOffset: offset, chunkScanned: chunkSymbols.length,
         loaded: valid.length, written: totalWritten, nextOffset, at: now,
         aiSignalsAttempted: aiResult.attempted, aiSignalsWritten: aiResult.written,
+        aiSignalsSkippedForTime: aiResult.skipped, aiSignalsLastError: aiResult.lastError,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { Send, Trash2, Loader2, Bot, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { useNavigate } from 'react-router-dom';
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 
@@ -19,6 +20,7 @@ const SUGGESTED_PROMPTS = [
 
 const AIAssistant = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -48,6 +50,10 @@ const AIAssistant = () => {
     loadContext();
   }, [user]);
 
+  // Calls the AI provider the user connected in Settings (Claude, NVIDIA,
+  // or any OpenAI-compatible vendor) via the ai-chat edge function — same
+  // connection AI Signal and the background scanner use. Non-streaming: a
+  // single response after a few seconds, simpler and provider-agnostic.
   const sendMessage = async (text: string) => {
     if (!text.trim() || isLoading) return;
     const userMsg: Msg = { role: 'user', content: text };
@@ -56,60 +62,18 @@ const AIAssistant = () => {
     setInput('');
     setIsLoading(true);
 
-    let assistantSoFar = '';
     try {
-      const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
-      const resp = await fetch(CHAT_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-        },
-        body: JSON.stringify({ messages: allMessages, context }),
-      });
-
-      if (resp.status === 429) { toast.error('Rate limited. Try again shortly.'); setIsLoading(false); return; }
-      if (resp.status === 402) { toast.error('Credits exhausted. Please add funds.'); setIsLoading(false); return; }
-      if (!resp.ok || !resp.body) throw new Error('Failed to start stream');
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let textBuffer = '';
-
-      const updateAssistant = (chunk: string) => {
-        assistantSoFar += chunk;
-        const content = assistantSoFar;
-        setMessages(prev => {
-          const last = prev[prev.length - 1];
-          if (last?.role === 'assistant') {
-            return prev.map((m, i) => i === prev.length - 1 ? { ...m, content } : m);
-          }
-          return [...prev, { role: 'assistant', content }];
-        });
-      };
-
-      let streamDone = false;
-      while (!streamDone) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        textBuffer += decoder.decode(value, { stream: true });
-
-        let newlineIndex: number;
-        while ((newlineIndex = textBuffer.indexOf('\n')) !== -1) {
-          let line = textBuffer.slice(0, newlineIndex);
-          textBuffer = textBuffer.slice(newlineIndex + 1);
-          if (line.endsWith('\r')) line = line.slice(0, -1);
-          if (line.startsWith(':') || line.trim() === '') continue;
-          if (!line.startsWith('data: ')) continue;
-          const jsonStr = line.slice(6).trim();
-          if (jsonStr === '[DONE]') { streamDone = true; break; }
-          try {
-            const parsed = JSON.parse(jsonStr);
-            const content = parsed.choices?.[0]?.delta?.content;
-            if (content) updateAssistant(content);
-          } catch { textBuffer = line + '\n' + textBuffer; break; }
+      const { data, error } = await supabase.functions.invoke('ai-chat', { body: { messages: allMessages, context } });
+      if (error || data?.error) {
+        const message = data?.error || error?.message || 'Chat error';
+        if (message.includes('AI provider not connected')) {
+          toast.error(message, { action: { label: 'Open Settings', onClick: () => navigate('/settings') } });
+        } else {
+          toast.error(message);
         }
+        return;
       }
+      setMessages(prev => [...prev, { role: 'assistant', content: data.data.content }]);
     } catch (e: any) {
       toast.error(e.message || 'Chat error');
     } finally {
