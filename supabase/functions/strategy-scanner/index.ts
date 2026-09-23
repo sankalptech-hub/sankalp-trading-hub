@@ -22,6 +22,14 @@
 // as its bearer token; (2) a manual "Refresh now" button in the UI, using
 // the calling user's own session. Both pass verify_jwt's check, so no extra
 // auth logic is needed here.
+//
+// AI layer: every symbol that matches any category this tick also gets a
+// genuine AI-authored BUY/SELL/HOLD call (uncapped — every match, not a
+// sample), written to public.ai_signals, using whichever provider/model the
+// user connected in Settings (Anthropic, or any OpenAI-compatible vendor
+// like NVIDIA NIM/OpenRouter/Groq). This is additive and silently no-ops if
+// nothing is connected yet; the rule-based scan results above are always
+// written regardless.
 
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -160,18 +168,25 @@ interface AiMatch {
 
 // Genuine AI-authored call for every match the deterministic scan found this
 // tick (uncapped, per the user's explicit instruction — every match gets a
-// real Claude-reasoned signal, not a sampled subset). No-ops cleanly if the
-// user hasn't connected an Anthropic key in Settings yet; the rule-based
-// scan results above are written regardless of AI availability.
+// real AI-reasoned signal, not a sampled subset). No-ops cleanly if the
+// user hasn't connected an AI provider in Settings yet; the rule-based scan
+// results above are written regardless of AI availability.
 async function generateAiSignals(admin: ReturnType<typeof createClient>, matches: AiMatch[]) {
   if (matches.length === 0) return { attempted: 0, written: 0 };
 
   const { data: secretRow } = await admin.from("ai_provider_secrets").select("api_key").eq("id", true).maybeSingle();
-  const { data: settingsRow } = await admin.from("ai_provider_settings").select("selected_model, connected").eq("id", true).maybeSingle();
+  const { data: settingsRow } = await admin.from("ai_provider_settings").select("selected_model, connected, provider, base_url").eq("id", true).maybeSingle();
   if (!secretRow || !settingsRow?.connected) return { attempted: 0, written: 0 };
 
   const apiKey = secretRow.api_key as string;
   const model = (settingsRow.selected_model as string) || "claude-haiku-4-5-20251001";
+  const provider = (settingsRow.provider as string) || "anthropic";
+  const baseUrl = (settingsRow.base_url as string) || "";
+  const isAnthropic = provider === "anthropic";
+  const aiUrl = isAnthropic ? `${ANTHROPIC_BASE}/messages` : `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+  const aiHeaders: Record<string, string> = isAnthropic
+    ? { "x-api-key": apiKey, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json" }
+    : { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
   const now = new Date().toISOString();
 
   let written = 0;
@@ -188,14 +203,14 @@ ${describeCategoryMatch(m.category, m.metrics)}
 Respond with ONLY a single valid JSON object, no other text, in exactly this shape:
 {"signal": "BUY" | "SELL" | "HOLD", "confidence": <integer 0-100>, "rationale": "<2-3 sentences, specific, citing the actual numbers above>", "risks": ["<specific risk 1>", "<specific risk 2>"]}`;
 
-      const aiRes = await fetch(`${ANTHROPIC_BASE}/messages`, {
+      const aiRes = await fetch(aiUrl, {
         method: "POST",
-        headers: { "x-api-key": apiKey, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json" },
+        headers: aiHeaders,
         body: JSON.stringify({ model, max_tokens: 400, messages: [{ role: "user", content: prompt }] }),
       });
       if (!aiRes.ok) return;
       const aiBody = await aiRes.json().catch(() => ({}));
-      const text: string = aiBody?.content?.[0]?.text ?? "";
+      const text: string = isAnthropic ? (aiBody?.content?.[0]?.text ?? "") : (aiBody?.choices?.[0]?.message?.content ?? "");
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
       if (!["BUY", "SELL", "HOLD"].includes(parsed.signal)) return;
@@ -204,7 +219,7 @@ Respond with ONLY a single valid JSON object, no other text, in exactly this sha
         symbol: m.symbol, category: m.category, signal: parsed.signal,
         confidence: Math.max(0, Math.min(100, Math.round(parsed.confidence))),
         rationale: parsed.rationale, risks: parsed.risks ?? [],
-        price: m.price, model, computed_at: now,
+        price: m.price, model, provider, computed_at: now,
       }, { onConflict: "symbol,category" });
       if (!error) written++;
     } catch {

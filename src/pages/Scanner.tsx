@@ -38,6 +38,7 @@ interface AiSignalRow {
   risks: string[];
   price: number;
   model: string;
+  provider: string;
   computed_at: string;
 }
 
@@ -553,7 +554,7 @@ const Scanner = () => {
               <Sparkles className="h-4 w-4 text-primary" /> {aiDetail?.symbol} — AI Call
             </DialogTitle>
             <DialogDescription>
-              {aiDetail && <>Reasoned by {aiDetail.model} at {new Date(aiDetail.computed_at).toLocaleString()}, based on real price/volume data — not financial advice.</>}
+              {aiDetail && <>Reasoned by {aiDetail.model} ({aiDetail.provider}) at {new Date(aiDetail.computed_at).toLocaleString()}, based on real price/volume data — not financial advice.</>}
             </DialogDescription>
           </DialogHeader>
           {aiDetail && (

@@ -2,11 +2,12 @@
 //
 // On-demand AI-authored trading signal for one symbol (used by the Trade
 // and Scanner pages' "Generate Signal" buttons). Fetches real price/
-// technical/fundamental data, feeds it to Claude (the user's own connected
-// Anthropic API key + model, via ai_provider_secrets/ai_provider_settings),
-// and returns a genuinely reasoned BUY/SELL/HOLD call — not a canned
-// threshold formula. Also upserts into ai_signals (category='manual') so
-// it shows up alongside the background-scan-generated signals.
+// technical/fundamental data, feeds it to whichever AI provider/model the
+// user connected in Settings (Anthropic, or any OpenAI-compatible vendor —
+// via ai_provider_secrets/ai_provider_settings), and returns a genuinely
+// reasoned BUY/SELL/HOLD call — not a canned threshold formula. Also
+// upserts into ai_signals (category='manual') so it shows up alongside the
+// background-scan-generated signals.
 
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -128,11 +129,13 @@ serve(async (req) => {
     const upperSymbol = String(symbol).toUpperCase();
 
     const { data: secretRow } = await admin.from("ai_provider_secrets").select("api_key").eq("id", true).maybeSingle();
-    const { data: settingsRow } = await admin.from("ai_provider_settings").select("selected_model, connected").eq("id", true).maybeSingle();
+    const { data: settingsRow } = await admin.from("ai_provider_settings").select("selected_model, connected, provider, base_url").eq("id", true).maybeSingle();
     if (!secretRow || !settingsRow?.connected) {
-      return json({ error: "AI provider not connected — connect your Anthropic API key in Settings first" }, 400);
+      return json({ error: "AI provider not connected — connect an AI provider in Settings first" }, 400);
     }
     const model = settingsRow.selected_model || "claude-haiku-4-5-20251001";
+    const provider = settingsRow.provider || "anthropic";
+    const baseUrl = settingsRow.base_url || "";
 
     const quote = await fetchQuoteAndCandles(upperSymbol);
     const rsi = computeRSI(quote.candles, 14);
@@ -156,16 +159,21 @@ Debt/Equity: ${fundamentals.debtToEquity?.toFixed(1) ?? "N/A"}` : "Fundamentals:
 Respond with ONLY a single valid JSON object, no other text, in exactly this shape:
 {"signal": "BUY" | "SELL" | "HOLD", "confidence": <integer 0-100>, "rationale": "<2-3 sentences, specific, citing the actual numbers above>", "risks": ["<specific risk 1>", "<specific risk 2>"]}`;
 
-    const aiRes = await fetch(`${ANTHROPIC_BASE}/messages`, {
+    const isAnthropic = provider === "anthropic";
+    const aiUrl = isAnthropic ? `${ANTHROPIC_BASE}/messages` : `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    const aiHeaders: Record<string, string> = isAnthropic
+      ? { "x-api-key": secretRow.api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json" }
+      : { Authorization: `Bearer ${secretRow.api_key}`, "content-type": "application/json" };
+    const aiRes = await fetch(aiUrl, {
       method: "POST",
-      headers: { "x-api-key": secretRow.api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json" },
+      headers: aiHeaders,
       body: JSON.stringify({ model, max_tokens: 500, messages: [{ role: "user", content: prompt }] }),
     });
     const aiBody = await aiRes.json().catch(() => ({}));
     if (!aiRes.ok) {
-      return json({ error: aiBody?.error?.message || `Anthropic API error (HTTP ${aiRes.status})` }, 502);
+      return json({ error: aiBody?.error?.message || aiBody?.error || `AI provider error (HTTP ${aiRes.status})` }, 502);
     }
-    const text: string = aiBody?.content?.[0]?.text ?? "";
+    const text: string = isAnthropic ? (aiBody?.content?.[0]?.text ?? "") : (aiBody?.choices?.[0]?.message?.content ?? "");
     let parsed: { signal: string; confidence: number; rationale: string; risks: string[] };
     try {
       const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -182,10 +190,10 @@ Respond with ONLY a single valid JSON object, no other text, in exactly this sha
       symbol: upperSymbol, category: "manual", signal: parsed.signal,
       confidence: Math.max(0, Math.min(100, Math.round(parsed.confidence))),
       rationale: parsed.rationale, risks: parsed.risks ?? [],
-      price: quote.price, model, computed_at: now,
+      price: quote.price, model, provider, computed_at: now,
     }, { onConflict: "symbol,category" });
 
-    return json({ data: { symbol: upperSymbol, price: quote.price, model, ...parsed, computed_at: now } });
+    return json({ data: { symbol: upperSymbol, price: quote.price, model, provider, ...parsed, computed_at: now } });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }

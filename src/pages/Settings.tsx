@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Settings2, AlertTriangle, Loader2, Eye, EyeOff, Sparkles } from 'lucide-react';
+import { Settings2, AlertTriangle, Loader2, Eye, EyeOff, Sparkles, CheckCircle2 } from 'lucide-react';
 
 const REGIONS = [
   { value: 'IN', label: '🇮🇳 India', currency: 'INR', exchange: 'NSE' },
@@ -23,6 +23,20 @@ const REGIONS = [
 const CURRENCIES = ['INR', 'USD', 'CAD', 'GBP', 'AUD', 'EUR', 'HKD'];
 const EXCHANGES_LIST = ['NSE', 'BSE', 'NYSE', 'NASDAQ', 'TSX', 'LSE', 'ASX', 'HKEX', 'XETR'];
 
+// Anthropic is native; everything else is treated as an OpenAI-compatible
+// /models + /chat/completions surface, which covers OpenAI, NVIDIA NIM,
+// OpenRouter, Groq and most free-tier model gateways. "Custom" lets the
+// user point at any other OpenAI-compatible base URL.
+const AI_PROVIDER_PRESETS = [
+  { key: 'anthropic', label: 'Anthropic (Claude)', baseUrl: '', keyPlaceholder: 'sk-ant-...', keyHelp: 'console.anthropic.com → API Keys' },
+  { key: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', keyPlaceholder: 'sk-...', keyHelp: 'platform.openai.com → API Keys' },
+  { key: 'nvidia', label: 'NVIDIA NIM', baseUrl: 'https://integrate.api.nvidia.com/v1', keyPlaceholder: 'nvapi-...', keyHelp: 'build.nvidia.com → free API key' },
+  { key: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyPlaceholder: 'sk-or-...', keyHelp: 'openrouter.ai/keys — includes free models' },
+  { key: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', keyPlaceholder: 'gsk_...', keyHelp: 'console.groq.com/keys — fast, free tier' },
+  { key: 'google', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', keyPlaceholder: 'AIza...', keyHelp: 'aistudio.google.com/apikey — free tier' },
+  { key: 'custom', label: 'Custom (OpenAI-compatible)', baseUrl: '', keyPlaceholder: '', keyHelp: 'Any provider exposing an OpenAI-compatible API' },
+] as const;
+
 const Settings = () => {
   const { user, signOut } = useAuth();
   const [displayName, setDisplayName] = useState('');
@@ -35,16 +49,69 @@ const Settings = () => {
 
   const [aiConnected, setAiConnected] = useState(false);
   const [aiModel, setAiModel] = useState<string | null>(null);
+  const [aiConnectedProvider, setAiConnectedProvider] = useState('anthropic');
   const [aiModels, setAiModels] = useState<{ id: string; display_name: string }[]>([]);
-  const [aiApiKey, setAiApiKey] = useState('');
-  const [aiKeyVisible, setAiKeyVisible] = useState(false);
-  const [aiConnecting, setAiConnecting] = useState(false);
   const [aiLoadingModels, setAiLoadingModels] = useState(false);
 
+  // Not-yet-connected flow: pick a provider, paste a key, Test Connection
+  // (validates + lists models WITHOUT saving), pick a model, then Save &
+  // Connect actually persists it.
+  const [aiProviderChoice, setAiProviderChoice] = useState<string>('anthropic');
+  const [aiBaseUrl, setAiBaseUrl] = useState('');
+  const [aiApiKey, setAiApiKey] = useState('');
+  const [aiKeyVisible, setAiKeyVisible] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTested, setAiTested] = useState(false);
+  const [aiTestedModels, setAiTestedModels] = useState<{ id: string; display_name: string }[]>([]);
+  const [aiPickedModel, setAiPickedModel] = useState('');
+  const [aiSaving, setAiSaving] = useState(false);
+
+  const currentPreset = AI_PROVIDER_PRESETS.find(p => p.key === aiProviderChoice) ?? AI_PROVIDER_PRESETS[0];
+  const connectedPresetLabel = AI_PROVIDER_PRESETS.find(p => p.key === aiConnectedProvider)?.label ?? aiConnectedProvider;
+
   const loadAiStatus = async () => {
-    const { data } = await supabase.from('ai_provider_settings').select('connected, selected_model').eq('id', true).maybeSingle();
+    const { data } = await supabase.from('ai_provider_settings').select('connected, selected_model, provider').eq('id', true).maybeSingle();
     setAiConnected(!!data?.connected);
     setAiModel(data?.selected_model ?? null);
+    setAiConnectedProvider(data?.provider || 'anthropic');
+  };
+
+  const selectAiProvider = (key: string) => {
+    setAiProviderChoice(key);
+    setAiBaseUrl(AI_PROVIDER_PRESETS.find(p => p.key === key)?.baseUrl ?? '');
+    setAiTested(false);
+    setAiTestedModels([]);
+    setAiPickedModel('');
+  };
+
+  const resetAiTest = () => { setAiTested(false); setAiTestedModels([]); setAiPickedModel(''); };
+
+  const testAiConnection = async () => {
+    if (!aiApiKey.trim()) { toast.error('Enter your API key'); return; }
+    if (aiProviderChoice !== 'anthropic' && !aiBaseUrl.trim()) { toast.error('Enter a base URL'); return; }
+    setAiTesting(true);
+    const { data, error } = await supabase.functions.invoke('ai-provider', {
+      body: { action: 'test', payload: { provider: aiProviderChoice, base_url: aiBaseUrl.trim(), api_key: aiApiKey.trim() } },
+    });
+    setAiTesting(false);
+    if (error || data?.error) { toast.error('Test failed: ' + (data?.error || error?.message)); resetAiTest(); return; }
+    setAiTestedModels(data.data.models);
+    setAiPickedModel(data.data.models[0]?.id ?? '');
+    setAiTested(true);
+    toast.success(`Key is valid — ${data.data.models.length} model${data.data.models.length === 1 ? '' : 's'} found`);
+  };
+
+  const saveAndConnectAi = async () => {
+    if (!aiPickedModel) { toast.error('Select a model first'); return; }
+    setAiSaving(true);
+    const { data, error } = await supabase.functions.invoke('ai-provider', {
+      body: { action: 'connect', payload: { provider: aiProviderChoice, base_url: aiBaseUrl.trim(), api_key: aiApiKey.trim(), model: aiPickedModel } },
+    });
+    setAiSaving(false);
+    if (error || data?.error) { toast.error('Connect failed: ' + (data?.error || error?.message)); return; }
+    setAiApiKey(''); resetAiTest();
+    toast.success(`Connected to ${currentPreset.label}`);
+    await loadAiStatus();
   };
 
   useEffect(() => {
@@ -57,18 +124,6 @@ const Settings = () => {
     });
     loadAiStatus();
   }, [user]);
-
-  const connectAiProvider = async () => {
-    if (!aiApiKey.trim()) { toast.error('Enter your Anthropic API key'); return; }
-    setAiConnecting(true);
-    const { data, error } = await supabase.functions.invoke('ai-provider', { body: { action: 'connect', payload: { api_key: aiApiKey.trim() } } });
-    setAiConnecting(false);
-    if (error || data?.error) { toast.error('Connection failed: ' + (data?.error || error?.message)); return; }
-    setAiModels(data.data.models);
-    setAiApiKey('');
-    toast.success('Connected to Anthropic');
-    await loadAiStatus();
-  };
 
   const disconnectAiProvider = async () => {
     await supabase.functions.invoke('ai-provider', { body: { action: 'disconnect' } });
@@ -221,17 +276,18 @@ const Settings = () => {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Connect your own Anthropic (Claude) API key to power AI-authored trading signals across Scanner and Trade — real reasoning grounded in live price/technical/fundamental data, not a fixed formula. Billed to your own Anthropic account, separately from any Claude subscription.
+            Connect your own AI provider — Claude, NVIDIA, OpenAI, or any OpenAI-compatible endpoint including free-tier ones — to power AI-authored trading signals across Scanner and Trade: real reasoning grounded in live price/technical/fundamental data, not a fixed formula. Billed to your own account with that provider.
           </p>
 
           {aiConnected ? (
             <div className="space-y-3">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">Connected</Badge>
+                <span className="text-xs text-muted-foreground">{connectedPresetLabel}</span>
                 {aiModel && <span className="text-xs font-mono text-muted-foreground">{aiModel}</span>}
               </div>
-              <div className="flex items-end gap-3">
-                <div className="flex-1 max-w-xs">
+              <div className="flex items-end gap-3 flex-wrap">
+                <div className="flex-1 max-w-xs min-w-[180px]">
                   <Label>Model</Label>
                   <Select value={aiModel ?? ''} onValueChange={changeAiModel} onOpenChange={(open) => { if (open && aiModels.length === 0) refreshAiModels(); }}>
                     <SelectTrigger>
@@ -250,18 +306,64 @@ const Settings = () => {
           ) : (
             <div className="space-y-3 max-w-md">
               <div>
-                <Label>Anthropic API Key</Label>
+                <Label>Provider</Label>
+                <Select value={aiProviderChoice} onValueChange={selectAiProvider}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {AI_PROVIDER_PRESETS.map(p => <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {aiProviderChoice !== 'anthropic' && (
+                <div>
+                  <Label>Base URL</Label>
+                  <Input value={aiBaseUrl} onChange={e => { setAiBaseUrl(e.target.value); resetAiTest(); }} placeholder="https://api.example.com/v1" />
+                </div>
+              )}
+
+              <div>
+                <Label>API Key</Label>
                 <div className="relative">
-                  <Input type={aiKeyVisible ? 'text' : 'password'} value={aiApiKey} onChange={e => setAiApiKey(e.target.value)} placeholder="sk-ant-..." />
+                  <Input
+                    type={aiKeyVisible ? 'text' : 'password'}
+                    value={aiApiKey}
+                    onChange={e => { setAiApiKey(e.target.value); resetAiTest(); }}
+                    placeholder={currentPreset.keyPlaceholder || 'API key'}
+                  />
                   <button className="absolute right-3 top-2.5 text-muted-foreground" onClick={() => setAiKeyVisible(v => !v)}>
                     {aiKeyVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">Get one at console.anthropic.com → API Keys. Never stored in your browser — sent straight to a server-side function.</p>
+                <p className="text-xs text-muted-foreground mt-1">{currentPreset.keyHelp}. Never stored in your browser — sent straight to a server-side function.</p>
               </div>
-              <Button onClick={connectAiProvider} disabled={aiConnecting}>
-                {aiConnecting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Verifying...</> : 'Connect'}
-              </Button>
+
+              {!aiTested ? (
+                <Button onClick={testAiConnection} disabled={aiTesting}>
+                  {aiTesting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Testing...</> : 'Test Connection'}
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Key is valid — {aiTestedModels.length} model{aiTestedModels.length === 1 ? '' : 's'} found
+                  </p>
+                  <div>
+                    <Label>Model</Label>
+                    <Select value={aiPickedModel} onValueChange={setAiPickedModel}>
+                      <SelectTrigger><SelectValue placeholder="Select model" /></SelectTrigger>
+                      <SelectContent>
+                        {aiTestedModels.map(m => <SelectItem key={m.id} value={m.id}>{m.display_name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button onClick={saveAndConnectAi} disabled={aiSaving || !aiPickedModel}>
+                      {aiSaving ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving...</> : 'Save & Connect'}
+                    </Button>
+                    <Button variant="outline" onClick={resetAiTest}>Re-test</Button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
