@@ -69,7 +69,10 @@ Strategies: ${context?.strategies ?? "[]"}`;
       : { model, max_tokens: 800, messages: [{ role: "system", content: systemPrompt }, ...convo] };
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45000);
+    // A human actively waiting for a chat reply tolerates more latency than
+    // an automated background batch does — some hosted models (e.g. very
+    // large ones) can genuinely take a minute-plus per response.
+    const timeout = setTimeout(() => controller.abort(), 90000);
     let aiRes: Response;
     try {
       aiRes = await fetch(aiUrl, { method: "POST", headers: aiHeaders, body: JSON.stringify(body), signal: controller.signal });
