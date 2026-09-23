@@ -201,9 +201,13 @@ async function generateAiSignals(admin: ReturnType<typeof createClient>, matches
   // matches (already-inflight calls still get to finish), and whatever
   // wasn't reached just waits for the next tick.
   const phaseStart = Date.now();
-  const AI_PHASE_BUDGET_MS = 90_000;
+  const AI_PHASE_BUDGET_MS = 100_000;
   const CONCURRENCY = 5;
-  const PER_CALL_TIMEOUT_MS = 15_000;
+  // Large hosted models (e.g. NVIDIA's 550B-parameter Nemotron Ultra) can
+  // genuinely take 20-40s+ per call — 15s was cutting off calls that would
+  // have completed fine, not actually failed ones. 40s gives real room
+  // while the phase budget above still bounds the total tick duration.
+  const PER_CALL_TIMEOUT_MS = 40_000;
 
   let next = 0;
   async function worker() {
