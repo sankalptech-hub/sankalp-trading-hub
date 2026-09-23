@@ -7,8 +7,9 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Settings2, AlertTriangle } from 'lucide-react';
+import { Settings2, AlertTriangle, Loader2, Eye, EyeOff, Sparkles } from 'lucide-react';
 
 const REGIONS = [
   { value: 'IN', label: '🇮🇳 India', currency: 'INR', exchange: 'NSE' },
@@ -32,6 +33,20 @@ const Settings = () => {
   const [preferredCurrency, setPreferredCurrency] = useState('INR');
   const [preferredExchange, setPreferredExchange] = useState('NSE');
 
+  const [aiConnected, setAiConnected] = useState(false);
+  const [aiModel, setAiModel] = useState<string | null>(null);
+  const [aiModels, setAiModels] = useState<{ id: string; display_name: string }[]>([]);
+  const [aiApiKey, setAiApiKey] = useState('');
+  const [aiKeyVisible, setAiKeyVisible] = useState(false);
+  const [aiConnecting, setAiConnecting] = useState(false);
+  const [aiLoadingModels, setAiLoadingModels] = useState(false);
+
+  const loadAiStatus = async () => {
+    const { data } = await supabase.from('ai_provider_settings').select('connected, selected_model').eq('id', true).maybeSingle();
+    setAiConnected(!!data?.connected);
+    setAiModel(data?.selected_model ?? null);
+  };
+
   useEffect(() => {
     if (!user) return;
     supabase.from('profiles').select('display_name, region, preferred_currency, preferred_exchange').eq('user_id', user.id).maybeSingle().then(({ data }) => {
@@ -40,7 +55,42 @@ const Settings = () => {
       if (data?.preferred_currency) setPreferredCurrency(data.preferred_currency);
       if (data?.preferred_exchange) setPreferredExchange(data.preferred_exchange);
     });
+    loadAiStatus();
   }, [user]);
+
+  const connectAiProvider = async () => {
+    if (!aiApiKey.trim()) { toast.error('Enter your Anthropic API key'); return; }
+    setAiConnecting(true);
+    const { data, error } = await supabase.functions.invoke('ai-provider', { body: { action: 'connect', payload: { api_key: aiApiKey.trim() } } });
+    setAiConnecting(false);
+    if (error || data?.error) { toast.error('Connection failed: ' + (data?.error || error?.message)); return; }
+    setAiModels(data.data.models);
+    setAiApiKey('');
+    toast.success('Connected to Anthropic');
+    await loadAiStatus();
+  };
+
+  const disconnectAiProvider = async () => {
+    await supabase.functions.invoke('ai-provider', { body: { action: 'disconnect' } });
+    setAiModels([]);
+    toast.success('AI provider disconnected');
+    await loadAiStatus();
+  };
+
+  const refreshAiModels = async () => {
+    setAiLoadingModels(true);
+    const { data, error } = await supabase.functions.invoke('ai-provider', { body: { action: 'list_models' } });
+    setAiLoadingModels(false);
+    if (error || data?.error) { toast.error('Could not fetch models: ' + (data?.error || error?.message)); return; }
+    setAiModels(data.data.models);
+  };
+
+  const changeAiModel = async (model: string) => {
+    setAiModel(model);
+    const { error } = await supabase.functions.invoke('ai-provider', { body: { action: 'set_model', payload: { model } } });
+    if (error) toast.error('Failed to update model: ' + error.message);
+    else toast.success(`Model set to ${model}`);
+  };
 
   const saveProfile = async () => {
     if (!user) return;
@@ -162,6 +212,58 @@ const Settings = () => {
           </div>
           {provider === 'twelvedata' && <p className="text-xs text-muted-foreground">Twelve Data supports 10+ global exchanges. Free tier: 800 calls/day.</p>}
           {provider === 'yahoo' && <p className="text-xs text-muted-foreground">Yahoo Finance — good coverage for NSE and US markets.</p>}
+        </CardContent>
+      </Card>
+
+      <Card className="card-glow">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" /> AI Provider</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Connect your own Anthropic (Claude) API key to power AI-authored trading signals across Scanner and Trade — real reasoning grounded in live price/technical/fundamental data, not a fixed formula. Billed to your own Anthropic account, separately from any Claude subscription.
+          </p>
+
+          {aiConnected ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">Connected</Badge>
+                {aiModel && <span className="text-xs font-mono text-muted-foreground">{aiModel}</span>}
+              </div>
+              <div className="flex items-end gap-3">
+                <div className="flex-1 max-w-xs">
+                  <Label>Model</Label>
+                  <Select value={aiModel ?? ''} onValueChange={changeAiModel} onOpenChange={(open) => { if (open && aiModels.length === 0) refreshAiModels(); }}>
+                    <SelectTrigger>
+                      {aiLoadingModels ? <span className="flex items-center gap-1 text-xs"><Loader2 className="h-3 w-3 animate-spin" /> Loading...</span> : <SelectValue placeholder="Select model" />}
+                    </SelectTrigger>
+                    <SelectContent>
+                      {aiModel && !aiModels.some(m => m.id === aiModel) && <SelectItem value={aiModel}>{aiModel}</SelectItem>}
+                      {aiModels.map(m => <SelectItem key={m.id} value={m.id}>{m.display_name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button size="sm" variant="outline" onClick={refreshAiModels} disabled={aiLoadingModels}>Refresh models</Button>
+                <Button size="sm" variant="ghost" className="text-destructive" onClick={disconnectAiProvider}>Disconnect</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3 max-w-md">
+              <div>
+                <Label>Anthropic API Key</Label>
+                <div className="relative">
+                  <Input type={aiKeyVisible ? 'text' : 'password'} value={aiApiKey} onChange={e => setAiApiKey(e.target.value)} placeholder="sk-ant-..." />
+                  <button className="absolute right-3 top-2.5 text-muted-foreground" onClick={() => setAiKeyVisible(v => !v)}>
+                    {aiKeyVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Get one at console.anthropic.com → API Keys. Never stored in your browser — sent straight to a server-side function.</p>
+              </div>
+              <Button onClick={connectAiProvider} disabled={aiConnecting}>
+                {aiConnecting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Verifying...</> : 'Connect'}
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

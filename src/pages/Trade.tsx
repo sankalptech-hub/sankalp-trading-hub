@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTradingMode } from '@/contexts/TradingModeContext';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,8 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { Loader2, AlertTriangle, Link as LinkIcon, FlaskConical } from 'lucide-react';
-import { fetchPrice, fetchCandleData, computeRSI, getCurrencySymbol, ALL_SYMBOLS } from '@/lib/marketData';
+import { Loader2, AlertTriangle, Link as LinkIcon, FlaskConical, Sparkles } from 'lucide-react';
+import { fetchPrice, getCurrencySymbol, ALL_SYMBOLS } from '@/lib/marketData';
 import { groww, toGrowwSymbol } from '@/lib/growwService';
 
 const statusColor: Record<string, string> = {
@@ -26,6 +26,8 @@ const Trade = () => {
   const { user } = useAuth();
   const { brokers: ctxBrokers, paperMode, defaultBrokerName, defaultBroker, togglePaperLive, setDefaultBroker: setCtxDefault } = useTradingMode();
   const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const [generatingSignal, setGeneratingSignal] = useState(false);
   const [symbol, setSymbol] = useState(params.get('symbol') || '');
   const [qty, setQty] = useState('');
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
@@ -72,24 +74,32 @@ const Trade = () => {
     return Object.keys(e).length === 0;
   };
 
+  // Real AI-authored call (Claude, via the user's own connected Anthropic
+  // key) instead of a mechanical RSI threshold. Requires AI Provider to be
+  // connected in Settings first — this intentionally does not fall back to
+  // fake/mechanical logic if it isn't, since that would defeat the point.
   const generateSignal = async () => {
     if (!symbol.trim()) { setErrors({ symbol: 'Symbol is required' }); return; }
     if (!user) return;
     const upperSymbol = symbol.toUpperCase();
+    setGeneratingSignal(true);
     try {
-      const [priceData, candles] = await Promise.all([
-        fetchPrice(upperSymbol),
-        fetchCandleData(upperSymbol, '1d', '3mo'),
-      ]);
-      const rsi = computeRSI(candles, 14);
-      const latestRsi = rsi[rsi.length - 1];
-      const signalType: 'BUY' | 'SELL' | 'HOLD' = latestRsi === null ? 'HOLD' : latestRsi < 35 ? 'BUY' : latestRsi > 65 ? 'SELL' : 'HOLD';
-      const { data, error } = await supabase.from('signals').insert({ user_id: user.id, symbol: upperSymbol, signal_type: signalType, price: priceData.price }).select().single();
-      if (error) { toast.error(error.message); return; }
-      setLastSignal(data);
-      toast.success(`Signal: ${signalType} ${upperSymbol}${latestRsi !== null ? ` (RSI ${latestRsi.toFixed(1)})` : ''}`);
+      const { data, error } = await supabase.functions.invoke('ai-signal', { body: { symbol: upperSymbol } });
+      if (error || data?.error) {
+        const message = data?.error || error?.message || 'Failed to generate signal';
+        if (message.includes('AI provider not connected')) {
+          toast.error(message, { action: { label: 'Open Settings', onClick: () => navigate('/settings') } });
+        } else {
+          toast.error(message);
+        }
+        return;
+      }
+      setLastSignal({ signal_type: data.data.signal, price: data.data.price, symbol: upperSymbol, created_at: data.data.computed_at });
+      toast.success(`AI Signal: ${data.data.signal} ${upperSymbol} (${data.data.confidence}% confidence) — ${data.data.rationale}`);
     } catch (err: any) {
       toast.error(err.message || 'Failed to generate signal');
+    } finally {
+      setGeneratingSignal(false);
     }
   };
 
@@ -260,7 +270,9 @@ const Trade = () => {
             </div>
           </div>
           <div className="flex gap-3">
-            <Button variant="outline" onClick={generateSignal}>Generate Signal</Button>
+            <Button variant="outline" onClick={generateSignal} disabled={generatingSignal}>
+              {generatingSignal ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Thinking...</> : <><Sparkles className="h-4 w-4 mr-2" /> AI Signal</>}
+            </Button>
             <Button onClick={executeTrade}>Execute Trade</Button>
           </div>
         </CardContent>

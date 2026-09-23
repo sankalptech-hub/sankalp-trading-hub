@@ -133,6 +133,89 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return results;
 }
 
+const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
+const ANTHROPIC_VERSION = "2023-06-01";
+
+// Human-readable description of exactly which numbers tripped a category's
+// heuristic, so the AI prompt is grounded in the same data the rule-based
+// scan used to flag this symbol — not just generic price/volume.
+function describeCategoryMatch(category: string, metrics: Record<string, unknown>): string {
+  switch (category) {
+    case "breakout":
+      return `Flagged for BREAKOUT: closed ${(metrics.pctAboveResistance as number).toFixed(2)}% above its 20-day resistance of ${(metrics.resistance20 as number).toFixed(2)}, on ${(metrics.volumeRatio as number).toFixed(2)}x its 20-day average volume.`;
+    case "scalp":
+      return `Flagged for SCALPING: ATR is ${(metrics.atrPct as number).toFixed(2)}% of price, average daily turnover ~₹${(metrics.avgTurnoverCr as number).toFixed(1)} crore, composite volatility/liquidity score ${metrics.score}/100.`;
+    case "big_money":
+      return `Flagged for BIG MONEY: today's turnover is ₹${(metrics.turnoverTodayCr as number).toFixed(1)} crore vs a 10-day average of ₹${(metrics.avgTurnoverCr as number).toFixed(1)} crore — a ${(metrics.turnoverRatio as number).toFixed(2)}x spike.`;
+    case "smart_money":
+      return `Flagged for SMART MONEY ${(metrics.direction as string).toUpperCase()}: volume is ${(metrics.volumeRatio as number).toFixed(2)}x the 10-day average alongside a ${(metrics.changePercent as number).toFixed(2)}% price move.`;
+    default:
+      return "";
+  }
+}
+
+interface AiMatch {
+  symbol: string; category: string; price: number; change_percent: number; metrics: Record<string, unknown>;
+}
+
+// Genuine AI-authored call for every match the deterministic scan found this
+// tick (uncapped, per the user's explicit instruction — every match gets a
+// real Claude-reasoned signal, not a sampled subset). No-ops cleanly if the
+// user hasn't connected an Anthropic key in Settings yet; the rule-based
+// scan results above are written regardless of AI availability.
+async function generateAiSignals(admin: ReturnType<typeof createClient>, matches: AiMatch[]) {
+  if (matches.length === 0) return { attempted: 0, written: 0 };
+
+  const { data: secretRow } = await admin.from("ai_provider_secrets").select("api_key").eq("id", true).maybeSingle();
+  const { data: settingsRow } = await admin.from("ai_provider_settings").select("selected_model, connected").eq("id", true).maybeSingle();
+  if (!secretRow || !settingsRow?.connected) return { attempted: 0, written: 0 };
+
+  const apiKey = secretRow.api_key as string;
+  const model = (settingsRow.selected_model as string) || "claude-haiku-4-5-20251001";
+  const now = new Date().toISOString();
+
+  let written = 0;
+  await mapLimit(matches, 5, async (m) => {
+    try {
+      const cur = "₹";
+      const prompt = `You are a disciplined equity research analyst producing a real trading call for a family's personal trading tool (not published financial advice). Base your call ONLY on the data below; do not invent facts not given here.
+
+Symbol: ${m.symbol}
+Price: ${cur}${m.price.toFixed(2)}
+Day change: ${m.change_percent >= 0 ? "+" : ""}${m.change_percent.toFixed(2)}%
+${describeCategoryMatch(m.category, m.metrics)}
+
+Respond with ONLY a single valid JSON object, no other text, in exactly this shape:
+{"signal": "BUY" | "SELL" | "HOLD", "confidence": <integer 0-100>, "rationale": "<2-3 sentences, specific, citing the actual numbers above>", "risks": ["<specific risk 1>", "<specific risk 2>"]}`;
+
+      const aiRes = await fetch(`${ANTHROPIC_BASE}/messages`, {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json" },
+        body: JSON.stringify({ model, max_tokens: 400, messages: [{ role: "user", content: prompt }] }),
+      });
+      if (!aiRes.ok) return;
+      const aiBody = await aiRes.json().catch(() => ({}));
+      const text: string = aiBody?.content?.[0]?.text ?? "";
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+      if (!["BUY", "SELL", "HOLD"].includes(parsed.signal)) return;
+
+      const { error } = await admin.from("ai_signals").upsert({
+        symbol: m.symbol, category: m.category, signal: parsed.signal,
+        confidence: Math.max(0, Math.min(100, Math.round(parsed.confidence))),
+        rationale: parsed.rationale, risks: parsed.risks ?? [],
+        price: m.price, model, computed_at: now,
+      }, { onConflict: "symbol,category" });
+      if (!error) written++;
+    } catch {
+      // One symbol's AI call failing must never take down the rest of the
+      // chunk's scan — the deterministic result already stands on its own.
+    }
+  });
+
+  return { attempted: matches.length, written };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -207,6 +290,7 @@ serve(async (req) => {
     ];
 
     let totalWritten = 0;
+    const aiMatches: AiMatch[] = [];
     for (const { category, pick } of categories) {
       const matches = valid.map((r) => ({ r, metrics: pick(r) })).filter((x) => x.metrics !== null);
       const nonMatchSymbols = valid.filter((r) => pick(r) === null).map((r) => r.symbol);
@@ -221,6 +305,9 @@ serve(async (req) => {
         );
         if (upsertErr) throw new Error(`upsert ${category}: ${upsertErr.message}`);
         totalWritten += matches.length;
+        for (const { r, metrics } of matches) {
+          aiMatches.push({ symbol: r.symbol, category, price: r.price, change_percent: r.change_percent, metrics: metrics as Record<string, unknown> });
+        }
       }
 
       // Symbols in this chunk that no longer match get their stale row
@@ -229,8 +316,17 @@ serve(async (req) => {
         const { error: delErr } = await admin.from("strategy_scan_results")
           .delete().eq("category", category).in("symbol", nonMatchSymbols);
         if (delErr) throw new Error(`delete stale ${category}: ${delErr.message}`);
+        // Same discipline for the AI-authored signal table: a symbol that
+        // dropped out of this category's match set no longer has a genuine
+        // basis for its old AI call, so retire it too.
+        await admin.from("ai_signals").delete().eq("category", category).in("symbol", nonMatchSymbols);
       }
     }
+
+    // Every match this tick gets a real AI-authored signal — uncapped, no
+    // sampling. Silently skipped if AI isn't connected yet (see
+    // generateAiSignals); never blocks the deterministic scan above.
+    const aiResult = await generateAiSignals(admin, aiMatches);
 
     const nextOffset = (offset + chunkSymbols.length) % totalCount;
     const { error: advanceErr } = await admin.from("strategy_scan_cursor")
@@ -241,6 +337,7 @@ serve(async (req) => {
       JSON.stringify({
         universeSize: totalCount, chunkOffset: offset, chunkScanned: chunkSymbols.length,
         loaded: valid.length, written: totalWritten, nextOffset, at: now,
+        aiSignalsAttempted: aiResult.attempted, aiSignalsWritten: aiResult.written,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
