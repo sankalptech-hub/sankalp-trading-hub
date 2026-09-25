@@ -14,6 +14,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { Loader2, AlertTriangle, Link as LinkIcon, FlaskConical } from 'lucide-react';
 import { fetchPrice, getCurrencySymbol, ALL_SYMBOLS } from '@/lib/marketData';
+import { groww } from '@/lib/growwService';
 
 const statusColor: Record<string, string> = {
   pending: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
@@ -75,8 +76,11 @@ const Trade = () => {
     if (!symbol.trim()) { setErrors({ symbol: 'Symbol is required' }); return; }
     if (!user) return;
     const q = Number(qty) || 50;
+    // Record a signal anchored to the real market price when known.
+    let price = q;
+    try { const p = await fetchPrice(symbol); price = p.price; } catch { /* keep qty fallback */ }
     const signalType = q > 100 ? 'BUY' : q < 10 ? 'SELL' : 'HOLD';
-    const { data, error } = await supabase.from('signals').insert({ user_id: user.id, symbol: symbol.toUpperCase(), signal_type: signalType, price: q }).select().single();
+    const { data, error } = await supabase.from('signals').insert({ user_id: user.id, symbol: symbol.toUpperCase(), signal_type: signalType, price }).select().single();
     if (error) { toast.error(error.message); return; }
     setLastSignal(data);
     toast.success(`Signal: ${signalType} ${symbol.toUpperCase()}`);
@@ -102,9 +106,23 @@ const Trade = () => {
     const broker = brokers.find(b => b.id === selectedBroker);
     const brokerName = broker?.broker_name || 'demo';
     const isDemo = brokerName === 'demo';
+    const isGroww = brokerName === 'groww';
 
+    // Live Groww order: place at the broker FIRST — abort on failure so local books stay honest.
+    let growwOrderId: string | null = null;
+    if (isGroww) {
+      const res = await groww.placeOrder({
+        tradingSymbol: upperSymbol, exchange: 'NSE', side, orderType: 'MARKET', quantity,
+        product: 'CNC',
+      });
+      if (res.error || !res.data) { toast.error(`Groww order failed: ${res.error}`); return; }
+      growwOrderId = res.data.orderId;
+    }
+
+    const tradePrice = livePrice?.price || 0;
     const { error: orderErr } = await supabase.from('orders').insert({
-      user_id: user.id, symbol: upperSymbol, qty: quantity, side, status: 'filled',
+      user_id: user.id, symbol: upperSymbol, qty: quantity, side,
+      status: isGroww ? 'pending' : 'filled',
       broker_id: selectedBroker || null, broker_name: brokerName,
     } as any);
     if (orderErr) { toast.error(orderErr.message); return; }
@@ -112,27 +130,42 @@ const Trade = () => {
     if (!isDemo && selectedBroker) {
       await supabase.from('broker_orders').insert({
         user_id: user.id, broker_id: selectedBroker, symbol: upperSymbol,
-        qty: quantity, side, price: livePrice?.price || 0, status: 'filled',
+        qty: quantity, side, price: tradePrice, status: growwOrderId ? 'submitted' : 'filled',
+        external_order_id: growwOrderId,
       } as any);
     }
 
-    const { data: existing } = await supabase.from('positions').select('*').eq('user_id', user.id).eq('symbol', upperSymbol).maybeSingle();
-    if (existing) {
-      const newQty = side === 'BUY' ? existing.qty + quantity : existing.qty - quantity;
-      await supabase.from('positions').update({ qty: newQty }).eq('id', existing.id);
-    } else {
-      await supabase.from('positions').insert({ user_id: user.id, symbol: upperSymbol, qty: side === 'BUY' ? quantity : -quantity, avg_price: livePrice?.price || Math.random() * 1000 });
+    // Local paper ledger updates for demo fills; live Groww positions sync via Positions page.
+    if (!isGroww) {
+      const { data: existing } = await supabase.from('positions').select('*').eq('user_id', user.id).eq('symbol', upperSymbol).maybeSingle();
+      if (existing) {
+        const newQty = side === 'BUY' ? existing.qty + quantity : existing.qty - quantity;
+        await supabase.from('positions').update({ qty: newQty, avg_price: tradePrice || existing.avg_price }).eq('id', existing.id);
+      } else {
+        await supabase.from('positions').insert({ user_id: user.id, symbol: upperSymbol, qty: side === 'BUY' ? quantity : -quantity, avg_price: tradePrice });
+      }
     }
 
-    await supabase.from('alerts').insert({ user_id: user.id, message: `Trade executed: ${side} ${quantity} ${upperSymbol}`, type: 'success' });
+    await supabase.from('alerts').insert({ user_id: user.id, message: isGroww ? `Groww order placed: ${side} ${quantity} ${upperSymbol} (${growwOrderId})` : `Trade executed: ${side} ${quantity} ${upperSymbol}`, type: 'success' });
     await checkRisks(upperSymbol, quantity);
 
-    toast.success(isDemo ? `Demo order placed: ${side} ${quantity} ${upperSymbol}` : `Order sent to ${broker?.display_name}: ${side} ${quantity} ${upperSymbol}`);
+    toast.success(isGroww ? `Order sent to Groww: ${side} ${quantity} ${upperSymbol}` : isDemo ? `Demo order placed: ${side} ${quantity} ${upperSymbol}` : `Order sent to ${broker?.display_name}: ${side} ${quantity} ${upperSymbol}`);
     setSymbol(''); setQty(''); setErrors({}); setLivePrice(null); setLastSignal(null);
     fetchOrders();
   };
 
   const updateOrderStatus = async (id: string, status: string) => {
+    // Cancelling a pending Groww order cancels it at the broker too.
+    if (status === 'cancelled') {
+      const order = orders.find(o => o.id === id);
+      if (order?.broker_name === 'groww') {
+        const { data: bo } = await supabase.from('broker_orders').select('external_order_id').eq('user_id', user!.id).eq('symbol', order.symbol).order('created_at', { ascending: false }).limit(1).maybeSingle();
+        if (bo?.external_order_id) {
+          const res = await groww.cancelOrder(bo.external_order_id);
+          if (res.error) { toast.error(`Groww cancel failed: ${res.error}`); return; }
+        }
+      }
+    }
     await supabase.from('orders').update({ status, updated_at: new Date().toISOString() } as any).eq('id', id);
     toast.success(`Order ${status}`); fetchOrders();
   };

@@ -58,6 +58,9 @@ const Scanner = () => {
     });
   }, [user]);
 
+  // Symbol sources that don't live in the DB — anything else is a user watchlist id.
+  const PRESET_KEYS = ['NSE_MAIN', 'NSE_TECH', 'US_TECH', 'US_FINANCE', 'CANADA_TSX', 'UK_LSE', 'GLOBAL_ETFS', 'CUSTOM'];
+
   const getSymbols = () => {
     if (watchlist === 'NSE_MAIN') return WATCHLIST_NSE_MAIN;
     if (watchlist === 'NSE_TECH') return WATCHLIST_NSE_TECH;
@@ -67,9 +70,7 @@ const Scanner = () => {
     if (watchlist === 'UK_LSE') return WATCHLIST_UK_LSE;
     if (watchlist === 'GLOBAL_ETFS') return WATCHLIST_GLOBAL_ETFS;
     if (watchlist === 'CUSTOM') return customSymbols;
-    const wl = userWatchlists.find(w => w.id === watchlist);
-    if (wl) return [];
-    return customSymbols;
+    return []; // user watchlists are fetched async in scan()
   };
 
   const scanUserWatchlist = async (wlId: string) => {
@@ -78,11 +79,10 @@ const Scanner = () => {
   };
 
   const scan = async () => {
-    let symbols = getSymbols();
-    // If user watchlist selected, fetch symbols first
-    if (watchlist !== 'NSE_MAIN' && watchlist !== 'NSE_TECH' && watchlist !== 'CUSTOM') {
-      symbols = await scanUserWatchlist(watchlist);
-    }
+    // Preset/custom sources resolve synchronously; a user watchlist id needs a DB fetch.
+    const symbols = PRESET_KEYS.includes(watchlist)
+      ? getSymbols()
+      : await scanUserWatchlist(watchlist);
     if (symbols.length === 0) { toast.error('No symbols to scan'); return; }
     setScanning(true);
     const start = Date.now();

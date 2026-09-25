@@ -1,17 +1,64 @@
 import { useState } from 'react';
+import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRealtimePositions } from '@/hooks/useRealtime';
+import { groww } from '@/lib/growwService';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Briefcase, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
+import { Briefcase, RefreshCw, DownloadCloud } from 'lucide-react';
 
 const Positions = () => {
   const { user } = useAuth();
   const { positions, loading, refresh } = useRealtimePositions(user?.id);
   const [q, setQ] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  // Pull live holdings from Groww and upsert them into the local positions ledger.
+  const syncFromGroww = async () => {
+    if (!user) return;
+    setSyncing(true);
+    const res = await groww.portfolio();
+    if (res.error || !res.data?.data) {
+      toast.error(`Groww sync failed: ${res.error}`);
+      setSyncing(false);
+      return;
+    }
+    const holdings = res.data.data;
+    if (holdings.length === 0) { toast.info('No Groww holdings to import'); setSyncing(false); return; }
+
+    const { data: existing } = await supabase.from('positions').select('id, symbol').eq('user_id', user.id);
+    const bySymbol = new Map((existing ?? []).map(p => [p.symbol.toUpperCase(), p.id]));
+    let inserted = 0, updated = 0, failed = 0;
+    for (const h of holdings) {
+      const sym = `${h.tradingSymbol}.NS`;
+      const row = {
+        user_id: user.id,
+        symbol: sym,
+        qty: h.quantity,
+        avg_price: h.averagePrice,
+        exchange: 'NSE',
+        currency: 'INR',
+        exchange_rate_to_inr: 1,
+        base_currency_value: h.currentValue,
+        updated_at: new Date().toISOString(),
+      };
+      const existingId = bySymbol.get(sym.toUpperCase());
+      if (existingId) {
+        const { error } = await supabase.from('positions').update(row).eq('id', existingId);
+        if (error) failed++; else updated++;
+      } else {
+        const { error } = await supabase.from('positions').insert(row);
+        if (error) failed++; else inserted++;
+      }
+    }
+    setSyncing(false);
+    if (failed > 0) toast.warning(`Groww sync: ${inserted} added, ${updated} updated, ${failed} failed`);
+    else toast.success(`Groww sync complete: ${inserted} added, ${updated} updated`);
+  };
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -32,6 +79,9 @@ const Positions = () => {
           <p className="text-muted-foreground text-sm mt-1">Open positions across all connected brokers · live</p>
         </div>
         <div className="text-right flex items-start gap-4">
+          <Button variant="ghost" size="icon" onClick={syncFromGroww} disabled={syncing} title="Sync from Groww">
+            <DownloadCloud className={`h-4 w-4 ${syncing ? 'animate-bounce' : ''}`} />
+          </Button>
           <Button variant="ghost" size="icon" onClick={handleRefresh} disabled={refreshing} title="Refresh">
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
           </Button>

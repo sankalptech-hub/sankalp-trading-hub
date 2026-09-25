@@ -15,6 +15,7 @@ import {
 import { toast } from 'sonner';
 import { Users, ShoppingCart, TrendingUp, Shield, Bell, Zap, CheckSquare } from 'lucide-react';
 import { groww } from '@/lib/growwService';
+import { adminOps, type BuildTaskStatus } from '@/lib/adminOps';
 import type { Tables } from '@/integrations/supabase/types';
 
 type Profile   = Tables<'profiles'>;
@@ -72,11 +73,12 @@ const AdminPanel = () => {
       setAllAlerts(alertsRes.data ?? []);
       setAllSignals(signalsRes.data ?? []);
 
-      // Build tasks via RPC
-      const { data: tasks } = await supabase.rpc('get_all_build_tasks');
-      setBuildTasks((tasks as BuildTask[]) ?? []);
-    } catch (err: any) {
-      toast.error('Failed to load admin data: ' + err.message);
+      // Build tasks: admins read all rows directly (RLS admin policy allows it)
+      const { data: tasks, error: tasksErr } = await supabase.from('build_tasks').select('*').order('updated_at', { ascending: false });
+      if (tasksErr) throw tasksErr;
+      setBuildTasks(tasks ?? []);
+    } catch (err: unknown) {
+      toast.error('Failed to load admin data: ' + (err instanceof Error ? err.message : String(err)));
     }
   }, [isAdmin]);
 
@@ -92,26 +94,20 @@ const AdminPanel = () => {
 
   const getName = (uid: string) => profileMap[uid] || uid.slice(0, 8) + '…';
 
-  // ── Role toggle ──────────────────────────────────────────────────────────
+  // ── Role toggle (via admin-ops edge function; direct RPC is revoked) ──────
   const toggleRole = async (uid: string, currentRole: string) => {
     if (uid === user?.id) { toast.error('You cannot change your own role'); return; }
     const newRole = currentRole === 'admin' ? 'user' : 'admin';
-    try {
-      const { error } = await supabase.rpc('update_user_role', {
-        _user_id: uid,
-        _new_role: newRole,
-      });
-      if (error) throw error;
-      toast.success(`Role updated to ${newRole}`);
-      loadData();
-    } catch (err: any) {
-      toast.error('Failed to update role: ' + err.message);
-    }
+    const res = await adminOps.setUserRole(uid, newRole);
+    if (res.error) { toast.error('Failed to update role: ' + res.error); return; }
+    toast.success(`Role updated to ${newRole}`);
+    loadData();
   };
 
-  // ── Build task status update ─────────────────────────────────────────────
+  // ── Build task status update (via admin-ops for cross-user tasks) ────────
   const updateTaskStatus = async (id: string, status: string) => {
-    await supabase.from('build_tasks').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
+    const res = await adminOps.updateBuildTask(id, status as BuildTaskStatus);
+    if (res.error) { toast.error('Failed to update task: ' + res.error); return; }
     setBuildTasks(prev => prev.map(t => t.id === id ? { ...t, status } : t));
   };
 
@@ -121,7 +117,7 @@ const AdminPanel = () => {
     const res = await groww.runScan();
     setScanLoading(false);
     if (res.error) toast.error('Scan failed: ' + res.error);
-    else toast.success(`Scan complete — signals: ${(res.data as any)?.signals_created ?? 0}`);
+    else toast.success(`Scan complete — signals: ${(res.data as { signals_created?: number } | undefined)?.signals_created ?? 0}`);
     loadData();
   };
 

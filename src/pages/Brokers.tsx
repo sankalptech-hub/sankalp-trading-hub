@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
 import { Plug, Eye, EyeOff, AlertTriangle, FlaskConical } from 'lucide-react';
+import { groww, checkGrowwConnected, saveGrowwApiKey, removeGrowwApiKey } from '@/lib/growwService';
 
 interface BrokerTemplate {
   broker_name: string;
@@ -62,6 +63,7 @@ const Brokers = () => {
   const [paperTrading, setPaperTrading] = useState(true);
   const [alpacaEnv, setAlpacaEnv] = useState<'paper' | 'live'>('paper');
   const [oandaEnv, setOandaEnv] = useState<'practice' | 'live'>('practice');
+  const [growwTesting, setGrowwTesting] = useState(false);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -141,6 +143,7 @@ const Brokers = () => {
     if (!user || !modalBroker) return;
     if (modalBroker.broker_name === 'alpaca') return saveAlpaca();
     if (modalBroker.broker_name === 'oanda') return saveOanda();
+    if (modalBroker.broker_name === 'groww') return saveGroww();
 
     const existing = getBrokerStatus(modalBroker.broker_name);
     const configJson = { ...fields, paperTrading };
@@ -158,14 +161,60 @@ const Brokers = () => {
     refreshMode();
   };
 
+  // Groww: validate + store credentials in integrations, then verify with a live funds ping.
+  const saveGroww = async () => {
+    if (!user || !modalBroker) return;
+    const errors: Record<string, string> = {};
+    if (!fields['API Key']?.trim()) errors['API Key'] = 'Required';
+    if (Object.keys(errors).length > 0) { setFieldErrors(errors); return; }
+
+    const { error: saveErr } = await saveGrowwApiKey(user.id, fields['API Key'].trim());
+    if (saveErr) { toast.error('Failed to save Groww credentials: ' + saveErr); return; }
+
+    // Verify the key with a real funds call before marking connected.
+    const funds = await groww.funds();
+    if (funds.error) {
+      await removeGrowwApiKey(user.id);
+      toast.error('Groww rejected the credentials: ' + funds.error);
+      return;
+    }
+
+    const configJson = { 'API Key': 'stored-in-integrations', paperTrading };
+    const existing = getBrokerStatus('groww');
+    if (existing) {
+      await supabase.from('brokers').update({ status: 'connected', config_json: configJson, region: 'INDIA' } as any).eq('id', existing.id);
+    } else {
+      const { data } = await supabase.from('brokers').insert({ user_id: user.id, broker_name: 'groww', display_name: 'Groww', status: 'connected', config_json: configJson, region: 'INDIA' } as any).select().single();
+      if (data) await supabase.from('broker_accounts').insert({ user_id: user.id, broker_id: data.id, account_id: 'GROWW-01', account_type: paperTrading ? 'paper' : 'live', balance: funds.data?.availableBalance ?? 0, currency: 'INR' } as any);
+    }
+    toast.success(`Connected to Groww — available funds ₹${(funds.data?.availableBalance ?? 0).toLocaleString('en-IN')}`);
+    setModalBroker(null);
+    load();
+    refreshMode();
+  };
+
   const disconnect = async (brokerId: string) => {
     await supabase.from('brokers').update({ status: 'disconnected' } as any).eq('id', brokerId);
+    // Drop stored Groww credentials too so a reconnect starts clean.
+    const broker = brokers.find(b => b.id === brokerId);
+    if (broker?.broker_name === 'groww' && user) await removeGrowwApiKey(user.id);
     toast.success('Disconnected');
     load();
     refreshMode();
   };
 
-  const testConnection = (name: string) => {
+  // Groww: real verification via a lightweight funds ping. Others keep the offline heuristic.
+  const testConnection = async (name: string, brokerName?: string) => {
+    if (brokerName === 'groww' && user) {
+      setGrowwTesting(true);
+      const connected = await checkGrowwConnected(user.id);
+      if (!connected) { toast.error('Groww: no API key saved — configure first'); setGrowwTesting(false); return; }
+      const funds = await groww.funds();
+      setGrowwTesting(false);
+      if (funds.error) { toast.error(`Groww: Connection failed — ${funds.error}`); return; }
+      toast.success('Groww: Connection successful — API key valid');
+      return;
+    }
     const success = Math.random() > 0.3;
     if (success) toast.success(`${name}: Connection successful`);
     else toast.error(`${name}: Connection failed`);
@@ -311,7 +360,7 @@ const Brokers = () => {
                       <div className="flex gap-2 flex-wrap">
                         {!isDemo && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openConfig(tmpl)}>Configure</Button>}
                         {existing && <Button size="sm" variant={existing.is_default ? 'default' : 'outline'} className="h-7 text-xs" onClick={() => setDefault(existing.id)}>{existing.is_default ? '★ Default' : 'Set Default'}</Button>}
-                        {existing?.status === 'connected' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => testConnection(tmpl.display_name)}>Test</Button>}
+                        {existing?.status === 'connected' && <Button size="sm" variant="outline" className="h-7 text-xs" disabled={growwTesting} onClick={() => testConnection(tmpl.display_name, tmpl.broker_name)}>Test</Button>}
                         {existing?.status === 'connected' && !isDemo && <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => disconnect(existing.id)}>Disconnect</Button>}
                       </div>
                     </CardContent>
